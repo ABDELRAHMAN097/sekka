@@ -1,0 +1,291 @@
+import { NavLink, Link, useNavigate, useParams } from "react-router-dom";
+import { HiOutlineChevronDown } from "react-icons/hi";
+import { RiLogoutBoxRLine } from "react-icons/ri";
+
+import AuthHeader from "./shared/AuthHeader";
+import { menuItems } from "../components/sidebarData";
+import { logout as firebaseLogout } from "@/services/authService";
+import { useI18n } from "../i18n/i18n/context";
+import { useAuth } from "@/context/AuthContext";
+import { useTenant } from "@/context/TenantContext";
+
+export default function Sidebar({ isOpen, setIsOpen }) {
+  const navigate = useNavigate();
+  const { locale } = useParams();
+  const { t } = useI18n();
+  const { user, profile, role, isSuperAdmin } = useAuth();
+  const { isModuleEnabled, tenantName, isImpersonating } = useTenant();
+  const isArabic = locale === "ar";
+
+  const handleLogout = async () => {
+    try {
+      await firebaseLogout();
+    } catch (error) {
+      console.error("Logout error:", error);
+    } finally {
+      localStorage.removeItem("token");
+      localStorage.removeItem("talep_user");
+      navigate(`/${locale}/login`);
+    }
+  };
+
+  const userName = profile?.name || user?.displayName || user?.email?.split("@")[0] || "المستخدم";
+
+  const roleSubtitle = t(`roles.${role}`) || (role ? role.replace("_", " ") : "Member");
+
+  const initials = userName
+    .split(" ")
+    .map((name) => name[0])
+    .slice(0, 2)
+    .join("")
+    .toUpperCase();
+
+  const filteredMenuItems = menuItems.filter((item) => {
+    if (item.allowedRoles && item.allowedRoles.length > 0 && !item.allowedRoles.includes(role)) {
+      return false;
+    }
+    // Module flag restriction for merchant users
+    if (item.moduleKey && !isSuperAdmin && !isModuleEnabled(item.moduleKey)) {
+      return false;
+    }
+    return true;
+  });
+
+  return (
+    <aside
+      className={`
+        fixed
+        top-0
+        bottom-0
+        z-50
+        w-[270px]
+        bg-card
+        border-white/10
+        transition-[width,transform]
+        duration-300
+        ease-in-out
+
+        ${isArabic ? "right-0 border-s" : "left-0 border-e"}
+
+        /* Mobile */
+        ${
+          isOpen
+            ? "translate-x-0"
+            : isArabic
+              ? "translate-x-full"
+              : "-translate-x-full"
+        }
+
+        /* Desktop */
+        lg:translate-x-0
+        ${isOpen ? "lg:w-[270px]" : "lg:w-[20px]"}
+      `}
+    >
+      {/* Toggle Button */}
+      <button
+        type="button"
+        onClick={() => setIsOpen((prev) => !prev)}
+        className="
+          absolute
+          top-1/2
+          -translate-y-1/2
+          end-[-7px]
+          z-50
+          hidden
+          lg:flex
+          w-3
+          h-16
+          items-center
+          justify-center
+          border
+          border-border
+          rounded-md
+          shadow-sm
+          cursor-pointer
+          hover:bg-border
+
+          transition-colors
+          duration-200
+        "
+      >
+        <span className="w-1 h-10 rounded-full bg-gray-700" />
+      </button>
+
+      {/* Sidebar Content */}
+      <div
+        className={`
+          h-full
+          flex
+          flex-col
+          overflow-hidden
+
+          transition-opacity
+          duration-200
+
+          ${
+            isOpen
+              ? "opacity-100"
+              : "opacity-0 pointer-events-none"
+          }
+        `}
+      >
+        {/* Top */}
+        <div className="flex-1 overflow-y-auto px-2 py-4 no-scrollbar">
+          {/* Logo */}
+          <div className="mb-5 px-1">
+            <Link to={`/${locale}`}>
+              <div className="flex items-center gap-2.5 p-2 rounded-2xl bg-white/5 border border-white/10 hover:border-emerald-500/30 transition">
+                <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-emerald-600 to-teal-400 flex items-center justify-center font-black text-white text-lg shadow-sm shrink-0">
+                  S
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-base font-black text-white tracking-tight">SEKKA</span>
+                    <span className="text-xs font-bold text-emerald-400">سِكّة</span>
+                  </div>
+                  <p className="text-[11px] text-gray-400 truncate">
+                    {tenantName || t("Brand Name")}
+                  </p>
+                </div>
+              </div>
+            </Link>
+          </div>
+
+          {/* Navigation */}
+          <nav className="flex flex-col gap-1">
+            {filteredMenuItems.map((item) => {
+              const Icon = item.icon;
+
+              return (
+                <NavLink
+                  key={item.path}
+                  to={`/${locale}${item.path}`}
+                  className={({ isActive }) =>
+                    `
+                    flex
+                    items-center
+                    justify-between
+                    px-4
+                    py-3
+                    rounded-xl
+                    transition-colors
+                    duration-200
+
+                    ${
+                      isActive
+                        ? "bg-hover-color text-primary-color font-bold shadow-sm"
+                        : "text-hover-color hover:bg-white/10 hover:text-white"
+                    }
+                    `
+                  }
+                >
+                  {({ isActive }) => (
+                    <>
+                      <div className="flex items-center gap-3 min-w-0">
+                        <Icon
+                          className={`
+                            w-5
+                            h-5
+                            shrink-0
+                            ${
+                              isActive
+                                ? "text-primary-color"
+                                : item.isMasterAdmin ? "text-emerald-400" : "text-hover-color"
+                            }
+                          `}
+                        />
+
+                        <span className="text-sm truncate font-medium">
+                          {item.name === "SekkaAdmin" ? "إدارة منصة سِكّة" : (t(item.name) || t(`pages.${item.name.toLowerCase()}`) || item.name)}
+                        </span>
+                      </div>
+
+                      {item.isMasterAdmin ? (
+                        <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 font-bold border border-emerald-500/30">
+                          Master
+                        </span>
+                      ) : (
+                        item.hasSubmenu && (
+                          <HiOutlineChevronDown className="w-4 h-4 shrink-0" />
+                        )
+                      )}
+                    </>
+                  )}
+                </NavLink>
+              );
+            })}
+          </nav>
+        </div>
+
+        {/* Bottom Section */}
+        <div className="shrink-0">
+          {/* Logout */}
+          <div className="px-2">
+            <button
+              type="button"
+              onClick={handleLogout}
+              className="
+                w-full
+                flex
+                items-center
+                gap-3
+                px-4
+                py-3
+                rounded-xl
+
+                text-hover-color
+
+                hover:bg-red-500/20
+                hover:text-red-300
+
+                transition-colors
+                duration-200
+                cursor-pointer
+              "
+            >
+              <RiLogoutBoxRLine className="w-5 h-5 shrink-0" />
+
+              <span className="text-sm font-medium">{t("Logout")}</span>
+            </button>
+          </div>
+
+          {/* User Profile Card */}
+          <div className="p-4">
+            <div className="w-full border-t border-white/10 mb-4" />
+
+            <div className="w-full flex items-center gap-3 px-3 py-3 rounded-xl bg-black/20 border border-white/10">
+              {profile?.imageUrl || profile?.avatar || user?.photoURL ? (
+                <img
+                  src={profile?.imageUrl || profile?.avatar || user?.photoURL}
+                  alt={userName}
+                  className="w-10 h-10 shrink-0 rounded-full object-cover border border-white/20 shadow-md"
+                />
+              ) : (
+                <div className="w-10 h-10 shrink-0 rounded-full bg-[#D4AF37] flex items-center justify-center text-gray-950 font-bold text-sm shadow-md">
+                  {initials || "أ"}
+                </div>
+              )}
+
+              <div className="min-w-0 flex flex-col flex-1">
+                <span className="text-sm font-bold text-white truncate">
+                  {userName}
+                </span>
+
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <span className={`inline-block w-2 h-2 rounded-full ${
+                    role === "super_admin" ? "bg-amber-400" :
+                    role === "admin" ? "bg-blue-400" :
+                    role === "driver" ? "bg-emerald-400" : "bg-gray-400"
+                  }`} />
+                  <span className="text-xs text-white/80 font-medium truncate">
+                    {roleSubtitle}
+                  </span>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </aside>
+  );
+}
