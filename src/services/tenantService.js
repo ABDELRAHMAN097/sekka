@@ -1,3 +1,4 @@
+
 import {
     collection,
     doc,
@@ -6,45 +7,36 @@ import {
     setDoc,
     updateDoc,
     serverTimestamp,
-    query,
-    where,
-    orderBy,
 } from "firebase/firestore";
 import { db } from "../config/firebase";
 
 export const TENANTS_COLLECTION = "tenants";
 export const DEFAULT_TENANT_ID = import.meta.env.VITE_TENANT_ID || "abu-hady";
 
-/**
- * Default modules configuration for any new or existing tenant
- */
 export const DEFAULT_MODULES = {
-    editLanding: true,  // تعديل اللاندينج باج
-    fleet: true,        // أسطول السيارات
-    wallet: true,       // المحفظة والمدفوعات
-    reports: true,      // التقارير المتقدمة
-    users: true,        // إدارة الموظفين والسائقين
-    customDomain: false // ربط دومين مخصص
+    editLanding: true,
+    fleet: true,
+    wallet: true,
+    reports: true,
+    users: true,
+    customDomain: false,
 };
 
-/**
- * Standard Tenant template structure
- */
 export const createDefaultTenantData = (id, name, slug) => {
     const now = new Date();
     const expiry = new Date();
-    expiry.setMonth(expiry.getMonth() + 1); // 1 month by default
+    expiry.setMonth(expiry.getMonth() + 1);
 
     return {
         id: id || slug,
         slug: slug || id,
         name: name || "متجر جديد",
-        status: "active", // active | suspended | expired | trial
+        status: "active",
         domain: "",
         ownerEmail: "",
         ownerPhone: "",
         subscription: {
-            plan: "pro", // starter | pro | enterprise
+            plan: "pro",
             billingCycle: "monthly",
             startDate: now.toISOString(),
             endDate: expiry.toISOString(),
@@ -64,246 +56,217 @@ export const createDefaultTenantData = (id, name, slug) => {
     };
 };
 
-/**
- * Fetches tenant data by tenantId (slug or id)
- */
+const normalizeTenant = (tenantDoc) => {
+    const data = tenantDoc.data();
+
+    return {
+        ...data,
+        id: tenantDoc.id,
+        modules: { ...(data.modules || {}) },
+        subscription: data.subscription || null,
+    };
+};
+
+const getDateValue = (value) => {
+    if (!value) return null;
+
+    if (typeof value?.toDate === "function") {
+        const date = value.toDate();
+        return Number.isNaN(date.getTime()) ? null : date;
+    }
+
+    if (typeof value?.seconds === "number") {
+        const date = new Date(value.seconds * 1000);
+        return Number.isNaN(date.getTime()) ? null : date;
+    }
+
+    const date = new Date(value);
+    return Number.isNaN(date.getTime()) ? null : date;
+};
+
 export const getTenant = async (tenantId) => {
     if (!tenantId) return null;
+
     try {
         const tenantRef = doc(db, TENANTS_COLLECTION, tenantId);
         const snap = await getDoc(tenantRef);
 
-        if (snap.exists()) {
-            const data = snap.data();
-            return {
-                id: snap.id,
-                ...data,
-                modules: { ...DEFAULT_MODULES, ...(data.modules || {}) },
-                subscription: {
-                    plan: "pro",
-                    currency: "EGP",
-                    price: 2500,
-                    status: "active",
-                    ...(data.subscription || {}),
-                },
-            };
-        }
+        if (!snap.exists()) return null;
 
-        // If it's the primary default tenant (abu-hady) and needs initialization
-        if (tenantId === "abu-hady") {
-            const defaultAbuHady = {
-                id: "abu-hady",
-                slug: "abu-hady",
-                name: "أبو هادي لخدمات الليموزين وتأجير السيارات",
-                status: "active",
-                domain: "",
-                subscription: {
-                    plan: "pro",
-                    billingCycle: "monthly",
-                    startDate: new Date("2026-10-01").toISOString(),
-                    endDate: new Date("2026-11-01").toISOString(),
-                    price: 2500,
-                    currency: "EGP",
-                    autoRenew: true,
-                    lastReminderSentAt: null,
-                    status: "active",
-                },
-                modules: { ...DEFAULT_MODULES },
-            };
-            return defaultAbuHady;
-        }
-
-        return null;
+        return normalizeTenant(snap);
     } catch (error) {
         console.error(`Error fetching tenant [${tenantId}]:`, error);
-        return null;
+        throw error;
     }
 };
 
-/**
- * Fetches all tenants for SEKKA Master Admin Dashboard
- */
 export const getAllTenants = async () => {
     try {
         const tenantsRef = collection(db, TENANTS_COLLECTION);
         const snap = await getDocs(tenantsRef);
 
-        const tenants = [];
-        snap.forEach((docItem) => {
-            const data = docItem.data();
-            tenants.push({
-                id: docItem.id,
-                ...data,
-                modules: { ...DEFAULT_MODULES, ...(data.modules || {}) },
-                subscription: {
-                    plan: "pro",
-                    currency: "EGP",
-                    price: 2500,
-                    status: "active",
-                    ...(data.subscription || {}),
-                },
-            });
-        });
-
-        // Ensure abu-hady is in the list if not yet written
-        if (!tenants.some((t) => t.id === "abu-hady" || t.slug === "abu-hady")) {
-            tenants.unshift({
-                id: "abu-hady",
-                slug: "abu-hady",
-                name: "أبو هادي لخدمات الليموزين وتأجير السيارات",
-                status: "active",
-                domain: "",
-                subscription: {
-                    plan: "pro",
-                    billingCycle: "monthly",
-                    startDate: new Date("2026-10-01").toISOString(),
-                    endDate: new Date("2026-11-01").toISOString(),
-                    price: 2500,
-                    currency: "EGP",
-                    autoRenew: true,
-                    lastReminderSentAt: null,
-                    status: "active",
-                },
-                modules: { ...DEFAULT_MODULES },
-            });
-        }
-
-        return tenants;
+        return snap.docs.map(normalizeTenant);
     } catch (error) {
         console.error("Error fetching all tenants:", error);
-        return [];
+        throw error;
     }
 };
 
-/**
- * Creates or overwrites a tenant
- */
-export const saveTenant = async (tenantId, tenantData) => {
+export const createTenant = async (tenantId, tenantData) => {
+    const id = tenantId || tenantData?.slug || tenantData?.id;
+
+    if (!id || !tenantData || typeof tenantData !== "object") {
+        throw new Error("بيانات التاجر غير مكتملة.");
+    }
+
     try {
-        const id = tenantId || tenantData.slug || tenantData.id;
         const tenantRef = doc(db, TENANTS_COLLECTION, id);
-        await setDoc(
-            tenantRef,
-            {
-                ...tenantData,
-                id,
-                updatedAt: serverTimestamp(),
-            },
-            { merge: true }
-        );
+        const existingTenant = await getDoc(tenantRef);
+
+        if (existingTenant.exists()) {
+            throw new Error("يوجد تاجر بهذا المعرّف بالفعل.");
+        }
+
+        await setDoc(tenantRef, {
+            ...tenantData,
+            id,
+            updatedAt: serverTimestamp(),
+        });
+
         return true;
     } catch (error) {
-        console.error("Error saving tenant:", error);
+        console.error(`Error creating tenant [${id}]:`, error);
         throw error;
     }
 };
 
-/**
- * Toggles or updates specific modules for a tenant
- */
+export const saveTenant = async (tenantId, tenantData) => {
+    return createTenant(tenantId, tenantData);
+};
+
 export const updateTenantModules = async (tenantId, modules) => {
+    if (!tenantId || !modules || typeof modules !== "object") {
+        throw new Error("معرّف التاجر أو بيانات الموديولات غير صحيحة.");
+    }
+
     try {
         const tenantRef = doc(db, TENANTS_COLLECTION, tenantId);
-        await setDoc(
-            tenantRef,
-            {
-                modules,
-                updatedAt: serverTimestamp(),
-            },
-            { merge: true }
-        );
+        const tenantSnap = await getDoc(tenantRef);
+
+        if (!tenantSnap.exists()) {
+            throw new Error("التاجر غير موجود.");
+        }
+
+        await updateDoc(tenantRef, {
+            modules: { ...modules },
+            updatedAt: serverTimestamp(),
+        });
+
         return true;
     } catch (error) {
-        console.error("Error updating tenant modules:", error);
+        console.error(`Error updating tenant modules [${tenantId}]:`, error);
         throw error;
     }
 };
 
-/**
- * Updates subscription details for a tenant
- */
 export const updateTenantSubscription = async (tenantId, subscription) => {
+    if (!tenantId || !subscription || typeof subscription !== "object") {
+        throw new Error("معرّف التاجر أو بيانات الاشتراك غير صحيحة.");
+    }
+
     try {
         const tenantRef = doc(db, TENANTS_COLLECTION, tenantId);
-        await setDoc(
-            tenantRef,
-            {
-                subscription,
-                updatedAt: serverTimestamp(),
-            },
-            { merge: true }
-        );
+        const tenantSnap = await getDoc(tenantRef);
+
+        if (!tenantSnap.exists()) {
+            throw new Error("التاجر غير موجود.");
+        }
+
+        await updateDoc(tenantRef, {
+            subscription: { ...subscription },
+            updatedAt: serverTimestamp(),
+        });
+
         return true;
     } catch (error) {
-        console.error("Error updating tenant subscription:", error);
+        console.error(`Error updating tenant subscription [${tenantId}]:`, error);
         throw error;
     }
 };
 
-/**
- * Updates status of a tenant (active, suspended, expired)
- */
 export const updateTenantStatus = async (tenantId, status) => {
+    if (!tenantId || !status) {
+        throw new Error("معرّف التاجر أو الحالة غير صحيحة.");
+    }
+
     try {
         const tenantRef = doc(db, TENANTS_COLLECTION, tenantId);
+        const tenantSnap = await getDoc(tenantRef);
+
+        if (!tenantSnap.exists()) {
+            throw new Error("التاجر غير موجود.");
+        }
+
         await updateDoc(tenantRef, {
             status,
             updatedAt: serverTimestamp(),
         });
+
         return true;
     } catch (error) {
-        console.error("Error updating tenant status:", error);
+        console.error(`Error updating tenant status [${tenantId}]:`, error);
         throw error;
     }
 };
 
-/**
- * Calculates remaining days in subscription
- */
 export const calculateDaysRemaining = (endDate) => {
-    if (!endDate) return 0;
-    const end = new Date(endDate);
+    const end = getDateValue(endDate);
+
+    if (!end) return null;
+
     const now = new Date();
     const diffTime = end.getTime() - now.getTime();
+
     return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 };
 
-/**
- * Identifies tenants with subscription expiring in <= 3 days
- */
 export const checkExpiringSubscriptions = (tenants = []) => {
     return tenants.filter((tenant) => {
         const days = calculateDaysRemaining(tenant.subscription?.endDate);
-        return days <= 3;
+
+        return (
+            tenant.status === "active" &&
+            tenant.subscription?.status === "active" &&
+            days !== null &&
+            days >= 0 &&
+            days <= 3
+        );
     });
 };
 
-/**
- * Records that a payment reminder alert was sent to the tenant
- */
 export const recordPaymentReminderSent = async (tenantId) => {
+    if (!tenantId) return false;
+
     try {
         const tenantRef = doc(db, TENANTS_COLLECTION, tenantId);
-        await setDoc(
-            tenantRef,
-            {
-                subscription: {
-                    lastReminderSentAt: new Date().toISOString(),
-                },
-                updatedAt: serverTimestamp(),
-            },
-            { merge: true }
-        );
+        const tenantSnap = await getDoc(tenantRef);
+
+        if (!tenantSnap.exists()) {
+            throw new Error("التاجر غير موجود.");
+        }
+
+        await updateDoc(tenantRef, {
+            "subscription.lastReminderSentAt": new Date().toISOString(),
+            updatedAt: serverTimestamp(),
+        });
+
         return true;
     } catch (error) {
-        console.error("Error recording payment reminder:", error);
+        console.error(`Error recording payment reminder [${tenantId}]:`, error);
         return false;
     }
 };
 
-/**
- * Diagnostics & health check for a tenant's database records
- */
 export const diagnoseTenant = async (tenantId) => {
     const report = {
         tenantId,
@@ -311,78 +274,144 @@ export const diagnoseTenant = async (tenantId) => {
         landingConfigured: false,
         modulesConfigured: false,
         subscriptionStatus: "unknown",
-        daysRemaining: 0,
+        daysRemaining: null,
         issues: [],
     };
 
+    if (!tenantId) {
+        report.issues.push("لم يتم تحديد معرّف التاجر.");
+        return report;
+    }
+
     try {
-        const tenantDoc = await getDoc(doc(db, TENANTS_COLLECTION, tenantId));
-        if (tenantDoc.exists()) {
-            report.existsInFirestore = true;
-            const data = tenantDoc.data();
-            report.modulesConfigured = !!data.modules;
-            report.daysRemaining = calculateDaysRemaining(data.subscription?.endDate);
-            report.subscriptionStatus = report.daysRemaining <= 0 ? "expired" : "active";
+        const tenantRef = doc(db, TENANTS_COLLECTION, tenantId);
+        const tenantSnap = await getDoc(tenantRef);
 
-            if (report.daysRemaining <= 3 && report.daysRemaining > 0) {
-                report.issues.push("الاشتراك ينتهي خلال أقل من 3 أيام.");
-            } else if (report.daysRemaining <= 0) {
-                report.issues.push("الاشتراك منتهي الصلاحية.");
-            }
-        } else {
-            report.issues.push("المستند غير موجود في Firestore، جاري استخدام القيم الافتراضية.");
+        if (!tenantSnap.exists()) {
+            report.issues.push(
+                "مستند التاجر غير موجود في Firestore. لم يتم إنشاء بيانات تلقائية."
+            );
+            return report;
         }
 
-        // Check landing config
-        const landingDoc = await getDoc(doc(db, TENANTS_COLLECTION, tenantId, "config", "landing"));
-        if (landingDoc.exists()) {
-            report.landingConfigured = true;
+        const data = tenantSnap.data();
+        const subscription = data.subscription || null;
+        const daysRemaining = calculateDaysRemaining(subscription?.endDate);
+
+        report.existsInFirestore = true;
+        report.modulesConfigured =
+            !!data.modules &&
+            typeof data.modules === "object" &&
+            Object.keys(data.modules).length > 0;
+        report.daysRemaining = daysRemaining;
+
+        if (!subscription) {
+            report.subscriptionStatus = "unknown";
+            report.issues.push("بيانات الاشتراك غير موجودة.");
+        } else if (subscription.status) {
+            report.subscriptionStatus = subscription.status;
+        } else if (daysRemaining === null) {
+            report.subscriptionStatus = "unknown";
+            report.issues.push("تاريخ انتهاء الاشتراك غير موجود أو غير صالح.");
         } else {
-            // Check fallback landingPage/settings
-            const rootLanding = await getDoc(doc(db, "landingPage", "settings"));
-            if (rootLanding.exists() && tenantId === "abu-hady") {
-                report.landingConfigured = true;
-                report.issues.push("اللاندينج تعمل عبر المسار القديم landingPage/settings، يوصى بالترحيل لمسار التاجر.");
-            } else {
-                report.issues.push("لم يتم ضبط صفحة لاندينج باج مخصصة لهذا التاجر بعد.");
+            report.subscriptionStatus =
+                daysRemaining > 0 ? "active" : "expired";
+        }
+
+        if (daysRemaining !== null) {
+            if (daysRemaining >= 0 && daysRemaining <= 3) {
+                report.issues.push("الاشتراك ينتهي خلال 3 أيام أو أقل.");
+            } else if (daysRemaining < 0) {
+                report.issues.push("تاريخ انتهاء الاشتراك قد مضى.");
             }
         }
-    } catch (err) {
-        report.issues.push(`خطأ أثناء الفحص: ${err.message}`);
+
+        if (!report.modulesConfigured) {
+            report.issues.push("بيانات الموديولات غير موجودة أو غير مكتملة.");
+        }
+
+        const landingRef = doc(
+            db,
+            TENANTS_COLLECTION,
+            tenantId,
+            "config",
+            "landing"
+        );
+        const landingSnap = await getDoc(landingRef);
+
+        report.landingConfigured = landingSnap.exists();
+
+        if (!report.landingConfigured) {
+            report.issues.push(
+                "لم يتم ضبط صفحة لاندينج مخصصة لهذا التاجر بعد."
+            );
+        }
+    } catch (error) {
+        console.error(`Error diagnosing tenant [${tenantId}]:`, error);
+        report.issues.push(`خطأ أثناء الفحص: ${error.message}`);
     }
 
     return report;
 };
 
-/**
- * Initializes default landing page for a new tenant
- */
-export const initializeTenantLanding = async (tenantId, tenantName = "") => {
+export const initializeTenantLanding = async (
+    tenantId,
+    tenantName = ""
+) => {
+    if (!tenantId) return false;
+
     try {
-        const landingDocRef = doc(db, TENANTS_COLLECTION, tenantId, "config", "landing");
+        const tenantRef = doc(db, TENANTS_COLLECTION, tenantId);
+        const tenantSnap = await getDoc(tenantRef);
+
+        if (!tenantSnap.exists()) {
+            console.error(
+                `Cannot initialize landing: tenant [${tenantId}] does not exist.`
+            );
+            return false;
+        }
+
+        const landingDocRef = doc(
+            db,
+            TENANTS_COLLECTION,
+            tenantId,
+            "config",
+            "landing"
+        );
         const existingSnap = await getDoc(landingDocRef);
+
         if (existingSnap.exists()) return true;
 
-        const displayName = tenantName || (tenantId === "abu-hady" ? "أبو هادي لخدمات الليموزين" : tenantId);
+        const displayName =
+            tenantName ||
+            tenantSnap.data().name ||
+            (tenantId === "abu-hady"
+                ? "أبو هادي لخدمات الليموزين"
+                : tenantId);
 
         await setDoc(landingDocRef, {
             hero: {
                 ar: {
                     title: `أهلاً بكم في ${displayName}`,
-                    subtitle: "خدمات ليموزين وتأجير سيارات فاخرة على مدار الساعة.",
-                    description: "نقدم لكم تجربة نقل مميزة تجمع بين الراحة، الرفاهية والأمان مع سائقين محترفين وأحدث أسطول سيارات.",
+                    subtitle:
+                        "خدمات ليموزين وتأجير سيارات فاخرة على مدار الساعة.",
+                    description:
+                        "نقدم لكم تجربة نقل مميزة تجمع بين الراحة، الرفاهية والأمان مع سائقين محترفين وأحدث أسطول سيارات.",
                     buttonText: "احجز رحلتك الآن",
                     buttonLink: "#booking",
                 },
                 en: {
                     title: `Welcome to ${displayName}`,
-                    subtitle: "Premium limousine and car rental services around the clock.",
-                    description: "Experience ultimate luxury, safety and comfort with professional drivers and high-end fleet.",
+                    subtitle:
+                        "Premium limousine and car rental services around the clock.",
+                    description:
+                        "Experience ultimate luxury, safety and comfort with professional drivers and high-end fleet.",
                     buttonText: "Book Your Ride",
                     buttonLink: "#booking",
                 },
                 image: {
-                    imageUrl: "https://images.unsplash.com/photo-1618843479313-40f8afb4b4d8?auto=format&fit=crop&w=1400&q=90",
+                    imageUrl:
+                        "https://images.unsplash.com/photo-1618843479313-40f8afb4b4d8?auto=format&fit=crop&w=1400&q=90",
                     publicId: "",
                     alt: displayName,
                 },
@@ -391,25 +420,43 @@ export const initializeTenantLanding = async (tenantId, tenantName = "") => {
                 ar: {
                     eyebrow: "خدماتنا المميزة",
                     title: "خيارات تنقل مصممة لأجلك",
-                    description: "مجموعة متكاملة من الخدمات الفاخرة لتلبية كافة احتياجاتك اليومية والخاصة.",
+                    description:
+                        "مجموعة متكاملة من الخدمات الفاخرة لتلبية كافة احتياجاتك اليومية والخاصة.",
                 },
                 en: {
                     eyebrow: "Our Services",
                     title: "Transportation tailored for you",
-                    description: "A comprehensive range of luxury services to satisfy all your travel needs.",
+                    description:
+                        "A comprehensive range of luxury services to satisfy all your travel needs.",
                 },
                 cards: {
                     "service-1": {
                         id: "service-1",
                         icon: "car",
-                        ar: { title: "تأجير سيارات فاخرة", description: "أحدث طرازات السيارات الفاخرة للمناسبات ورجال الأعمال." },
-                        en: { title: "Luxury Car Rental", description: "The newest luxury car models for business and events." },
+                        ar: {
+                            title: "تأجير سيارات فاخرة",
+                            description:
+                                "أحدث طرازات السيارات الفاخرة للمناسبات ورجال الأعمال.",
+                        },
+                        en: {
+                            title: "Luxury Car Rental",
+                            description:
+                                "The newest luxury car models for business and events.",
+                        },
                     },
                     "service-2": {
                         id: "service-2",
                         icon: "driver",
-                        ar: { title: "توصيل مطارات وسياحة", description: "خدمة استقبال وتوصيل من وإلى جميع المطارات بأعلى مستوى." },
-                        en: { title: "Airport Transfers", description: "Meet and greet airport transfers with utmost punctuality." },
+                        ar: {
+                            title: "توصيل مطارات وسياحة",
+                            description:
+                                "خدمة استقبال وتوصيل من وإلى جميع المطارات بأعلى مستوى.",
+                        },
+                        en: {
+                            title: "Airport Transfers",
+                            description:
+                                "Meet and greet airport transfers with utmost punctuality.",
+                        },
                     },
                 },
             },
@@ -421,61 +468,75 @@ export const initializeTenantLanding = async (tenantId, tenantName = "") => {
 
         return true;
     } catch (error) {
-        console.error(`Error initializing landing for tenant [${tenantId}]:`, error);
+        console.error(
+            `Error initializing landing for tenant [${tenantId}]:`,
+            error
+        );
         return false;
     }
 };
 
-/**
- * 1-Click Auto-Repair for any merchant / tenant
- * Creates missing documents, migrates legacy landing if abu-hady, repairs subscription
- */
 export const autoRepairTenant = async (tenantId) => {
     const repairs = [];
+
+    if (!tenantId) {
+        return {
+            success: false,
+            error: "لم يتم تحديد معرّف التاجر.",
+            repairs,
+        };
+    }
+
     try {
         const tenantRef = doc(db, TENANTS_COLLECTION, tenantId);
         const tenantSnap = await getDoc(tenantRef);
 
         if (!tenantSnap.exists()) {
-            const defaultData = createDefaultTenantData(
-                tenantId,
-                tenantId === "abu-hady" ? "أبو هادي لخدمات الليموزين وتأجير السيارات" : tenantId,
-                tenantId
-            );
-            await setDoc(tenantRef, defaultData);
-            repairs.push("تم إنشاء مستند التاجر الرئيسي في قاعدة البيانات بنجاح.");
+            return {
+                success: false,
+                error: "التاجر غير موجود. أنشئ التاجر أولاً من لوحة المنصة.",
+                repairs,
+            };
         }
 
-        // Check landing doc
-        const landingRef = doc(db, TENANTS_COLLECTION, tenantId, "config", "landing");
+        const tenantData = tenantSnap.data();
+
+        const landingRef = doc(
+            db,
+            TENANTS_COLLECTION,
+            tenantId,
+            "config",
+            "landing"
+        );
         const landingSnap = await getDoc(landingRef);
 
         if (!landingSnap.exists()) {
-            if (tenantId === "abu-hady") {
-                const legacyLandingRef = doc(db, "landingPage", "settings");
-                const legacySnap = await getDoc(legacyLandingRef);
-                if (legacySnap.exists()) {
-                    await setDoc(landingRef, {
-                        ...legacySnap.data(),
-                        updatedAt: serverTimestamp(),
-                    });
-                    repairs.push("تم نسخ وترحيل بيانات اللاندينج القديمة (landingPage/settings) إلى مسار أبو هادي المخصص.");
-                } else {
-                    await initializeTenantLanding(tenantId, "أبو هادي لخدمات الليموزين");
-                    repairs.push("تم توليد لاندينج باج افتراضية لأبو هادي.");
-                }
-            } else {
-                await initializeTenantLanding(tenantId);
-                repairs.push("تم تهيئة صفحة هبوط أولية للتاجر بنجاح.");
+            const initialized = await initializeTenantLanding(
+                tenantId,
+                tenantData.name || ""
+            );
+
+            if (!initialized) {
+                return {
+                    success: false,
+                    error: "تعذر إنشاء صفحة الهبوط الافتراضية.",
+                    repairs,
+                };
             }
+
+            repairs.push("تم إنشاء صفحة هبوط افتراضية لمسار التاجر.");
         }
 
         return {
             success: true,
-            repairs: repairs.length > 0 ? repairs : ["جميع سجلات التاجر سليمة ومحدثة ولا تتطلب إصلاح."],
+            repairs:
+                repairs.length > 0
+                    ? repairs
+                    : ["سجلات التاجر الحالية سليمة ولا تتطلب إصلاحاً."],
         };
     } catch (error) {
         console.error(`Error auto-repairing tenant [${tenantId}]:`, error);
+
         return {
             success: false,
             error: error.message,
@@ -484,32 +545,43 @@ export const autoRepairTenant = async (tenantId) => {
     }
 };
 
-/**
- * Generates WhatsApp reminder URL with pre-filled Arabic message
- */
 export const generateWhatsAppReminderUrl = (tenant) => {
-    const rawPhone = tenant.ownerPhone || "";
-    // Normalize phone number (strip non-digits, ensure country code)
+    const rawPhone = tenant?.ownerPhone || "";
     let cleanPhone = rawPhone.replace(/[^0-9]/g, "");
+
     if (cleanPhone.startsWith("01")) {
-        cleanPhone = "2" + cleanPhone; // Egypt default prefix
+        cleanPhone = `2${cleanPhone}`;
     }
 
-    const days = calculateDaysRemaining(tenant.subscription?.endDate);
-    const endDateStr = tenant.subscription?.endDate
-        ? new Date(tenant.subscription.endDate).toLocaleDateString("ar-EG")
-        : "قريباً";
+    if (!cleanPhone) return "";
 
-    const daysText =
-        days <= 0
-            ? "منتهي الصلاحية حالياً"
-            : `سينتهي خلال ${days} ${days === 1 ? "يوم" : "أيام"} (بتاريخ ${endDateStr})`;
+    const subscription = tenant?.subscription || {};
+    const days = calculateDaysRemaining(subscription.endDate);
+    const endDate = getDateValue(subscription.endDate);
+    const endDateStr = endDate
+        ? endDate.toLocaleDateString("ar-EG")
+        : "غير محدد";
 
-    const msg = `مرحباً بك ${tenant.name || "عزيزنا الشريك"}،
-نحيطكم علماً بأن اشتراككم في منصة SEKKA - سِكّة (باقة: ${tenant.subscription?.plan || "Pro"}) ${daysText}.
-يرجى التواصل لتجديد الاشتراك لضمان استمرار عمل موقعكم ولوحة التحكم ومزامنة البيانات دون أي انقطاع.
+    let daysText;
+
+    if (days === null) {
+        daysText = "تاريخ انتهاء الاشتراك غير محدد";
+    } else if (days < 0) {
+        daysText = "تجاوز تاريخ انتهاء الاشتراك";
+    } else if (days === 0) {
+        daysText = "ينتهي اليوم";
+    } else {
+        daysText = `سينتهي خلال ${days} ${
+            days === 1 ? "يوم" : "أيام"
+        } (بتاريخ ${endDateStr})`;
+    }
+
+    const msg = `مرحباً بك ${tenant?.name || "عزيزنا الشريك"}،
+نحيطكم علماً بأن حالة اشتراككم في منصة SEKKA - سِكّة (باقة: ${
+        subscription.plan || "غير محددة"
+    }) هي: ${daysText}.
+يرجى التواصل معنا لمراجعة بيانات الاشتراك وتجديده عند الحاجة.
 شكراً لاختياركم منصة سِكّة!`;
 
     return `https://wa.me/${cleanPhone}?text=${encodeURIComponent(msg)}`;
 };
-

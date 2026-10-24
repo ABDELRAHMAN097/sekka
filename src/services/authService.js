@@ -1,3 +1,4 @@
+
 import {
     createUserWithEmailAndPassword,
     sendEmailVerification,
@@ -11,14 +12,12 @@ import {
     reauthenticateWithCredential,
     EmailAuthProvider,
 } from "firebase/auth";
-
 import {
     doc,
     setDoc,
     getDoc,
     serverTimestamp,
 } from "firebase/firestore";
-
 import { auth, db } from "../config/firebase";
 import {
     USERS_COLLECTION,
@@ -28,9 +27,80 @@ import {
 
 export const googleProvider = new GoogleAuthProvider();
 
-/**
- * Registers a new user with email and password and creates their Firestore record.
- */
+const getPublicTenantId = (tenantId) => {
+    if (tenantId) return tenantId;
+
+    if (typeof window === "undefined") return null;
+
+    const hostname = window.location.hostname;
+    if (hostname === "localhost" || hostname === "127.0.0.1") {
+        return import.meta.env.VITE_TENANT_ID || null;
+    }
+
+    const parts = hostname.split(".");
+    if (parts.length < 3 || ["www", "sekka"].includes(parts[0])) {
+        return import.meta.env.VITE_TENANT_ID || null;
+    }
+
+    return parts[0];
+};
+
+const saveUserProfile = async (user, { name, phone = "" }) => {
+    const userRef = doc(db, USERS_COLLECTION, user.uid);
+    const existing = await getDoc(userRef);
+
+    if (existing.exists()) {
+        await saveUserSearchFields(user.uid, existing.data());
+        return existing.data();
+    }
+
+    const profile = {
+        uid: user.uid,
+        name: name || user.displayName || "مستخدم",
+        email: user.email || "",
+        phone: phone || user.phoneNumber || "",
+        role: "customer",
+        status: "active",
+        ...getSearchFields({
+            name: name || user.displayName || "مستخدم",
+            email: user.email || "",
+            phone: phone || user.phoneNumber || "",
+        }),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+    };
+
+    await setDoc(userRef, profile);
+    return profile;
+};
+
+const linkTenantCustomer = async (user, tenantId) => {
+    if (!tenantId) return;
+
+    const tenantRef = doc(db, "tenants", tenantId);
+    const tenantSnapshot = await getDoc(tenantRef);
+
+    if (!tenantSnapshot.exists() || tenantSnapshot.data()?.status !== "active") {
+        throw new Error("The selected tenant is unavailable.");
+    }
+
+    const customerRef = doc(db, "tenants", tenantId, "customers", user.uid);
+    const customerSnapshot = await getDoc(customerRef);
+
+    if (!customerSnapshot.exists()) {
+        await setDoc(customerRef, {
+            uid: user.uid,
+            name: user.displayName || "",
+            email: user.email || "",
+            phone: user.phoneNumber || "",
+            role: "customer",
+            status: "active",
+            createdAt: serverTimestamp(),
+            updatedAt: serverTimestamp(),
+        });
+    }
+};
+
 export const registerWithEmail = async ({
     email,
     password,
@@ -38,74 +108,31 @@ export const registerWithEmail = async ({
     phone = "",
     tenantId = null,
 }) => {
-    const userCredential = await createUserWithEmailAndPassword(
-        auth,
-        email,
-        password
-    );
+    const result = await createUserWithEmailAndPassword(auth, email, password);
+    const user = result.user;
 
-    const user = userCredential.user;
+    await updateProfile(user, { displayName: name || "" });
 
-    await updateProfile(user, {
-        displayName: name,
-    });
+    const profile = await saveUserProfile(user, { name, phone });
+    await linkTenantCustomer(user, getPublicTenantId(tenantId));
 
     try {
         await sendEmailVerification(user);
     } catch (error) {
-        console.warn("Could not send email verification:", error);
+        console.warn("Could not send verification email:", error);
     }
 
-    try {
-        const searchFields = getSearchFields({
-            name,
-            email,
-            phone,
-        });
-
-        const activeTenant =
-            tenantId ||
-            (typeof window !== "undefined"
-                ? sessionStorage.getItem("sekka_impersonated_tenant")
-                : null) ||
-            import.meta.env.VITE_TENANT_ID ||
-            "abu-hady";
-
-        await setDoc(
-            doc(db, USERS_COLLECTION, user.uid),
-            {
-                uid: user.uid,
-                name: name || "",
-                email: email || "",
-                phone: phone || "",
-                role: "customer",
-                status: "active",
-                tenantId: activeTenant,
-                ...searchFields,
-                createdAt: serverTimestamp(),
-                updatedAt: serverTimestamp(),
-            }
-        );
-    } catch (firestoreError) {
-        console.error("Firestore user creation error:", firestoreError);
-        throw firestoreError;
-    }
-
-    return user;
+    return { ...user, profile };
 };
 
-/**
- * Signs in a user with email and password.
- */
 export const loginWithEmail = async (email, password) => {
     const result = await signInWithEmailAndPassword(auth, email, password);
 
     try {
-        const userDocRef = doc(db, USERS_COLLECTION, result.user.uid);
-        const userDoc = await getDoc(userDocRef);
-
-        if (userDoc.exists()) {
-            await saveUserSearchFields(result.user.uid, userDoc.data());
+        const userRef = doc(db, USERS_COLLECTION, result.user.uid);
+        const userSnapshot = await getDoc(userRef);
+        if (userSnapshot.exists()) {
+            await saveUserSearchFields(result.user.uid, userSnapshot.data());
         }
     } catch (error) {
         console.error("User search fields update error:", error);
@@ -114,87 +141,39 @@ export const loginWithEmail = async (email, password) => {
     return result;
 };
 
-/**
- * Signs in or registers a user via Google popup.
- */
-export const signInWithGoogle = async () => {
+export const signInWithGoogle = async (tenantId = null) => {
     const result = await signInWithPopup(auth, googleProvider);
     const user = result.user;
 
-    try {
-        const userDocRef = doc(db, USERS_COLLECTION, user.uid);
-        const userDoc = await getDoc(userDocRef);
+    await saveUserProfile(user, {
+        name: user.displayName || "مستخدم Google",
+        phone: user.phoneNumber || "",
+    });
 
-        if (!userDoc.exists()) {
-            const searchFields = getSearchFields({
-                name: user.displayName || "مستخدم Google",
-                email: user.email || "",
-                phone: user.phoneNumber || "",
-            });
-
-            await setDoc(userDocRef, {
-                uid: user.uid,
-                name: user.displayName || "مستخدم Google",
-                email: user.email || "",
-                phone: user.phoneNumber || "",
-                role: "customer",
-                status: "active",
-                ...searchFields,
-                createdAt: serverTimestamp(),
-                updatedAt: serverTimestamp(),
-            });
-        } else {
-            await saveUserSearchFields(user.uid, userDoc.data());
-        }
-    } catch (error) {
-        console.error("Firestore Google sign in doc error:", error);
-    }
+    await linkTenantCustomer(user, getPublicTenantId(tenantId));
 
     return result;
 };
 
-/**
- * Sends a password reset email.
- */
-export const resetPassword = async (email) => {
-    return await sendPasswordResetEmail(auth, email);
-};
+export const resetPassword = (email) =>
+    sendPasswordResetEmail(auth, email);
 
-/**
- * Signs out the current user.
- */
-export const logout = async () => {
-    return await signOut(auth);
-};
+export const logout = () => signOut(auth);
 
-/**
- * Re-authenticates and updates current user password.
- */
 export const changeCurrentUserPassword = async (currentPassword, newPassword) => {
     const user = auth.currentUser;
-    if (!user || !user.email) {
-        throw new Error("No authenticated user found.");
-    }
+    if (!user?.email) throw new Error("No authenticated user found.");
 
-    try {
-        const credential = EmailAuthProvider.credential(user.email, currentPassword);
-        await reauthenticateWithCredential(user, credential);
-        await updatePassword(user, newPassword);
-        return true;
-    } catch (error) {
-        console.error("Error changing password:", error);
-        throw error;
-    }
+    const credential = EmailAuthProvider.credential(user.email, currentPassword);
+    await reauthenticateWithCredential(user, credential);
+    await updatePassword(user, newPassword);
+    return true;
 };
 
-/**
- * Resends email verification to currently logged in user.
- */
 export const resendVerificationEmail = async () => {
     const user = auth.currentUser;
-    if (!user) {
-        throw new Error("No authenticated user found.");
-    }
+    if (!user) throw new Error("No authenticated user found.");
+
     await sendEmailVerification(user);
     return true;
 };

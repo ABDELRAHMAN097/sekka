@@ -73,7 +73,7 @@ export default function DashboardLayout({ children }) {
                                 ⚠️ تنبيه: اشتراك باقتكم في منصة SEKKA ينتهي خلال {daysRemaining > 0 ? `${daysRemaining} أيام` : "فترة وجيزة"}. يرجى التجديد لضمان استمرار عمل المتجر بدون انقطاع.
                             </span>
                             <a
-                                href="https://wa.me/201012345678"
+                                href="https://wa.me/201023671214"
                                 target="_blank"
                                 rel="noreferrer"
                                 className="px-3 py-1 rounded-lg bg-amber-500 text-black font-bold text-xs shrink-0"
