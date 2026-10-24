@@ -325,14 +325,10 @@ const useUsers = () => {
         ]);
     }, [fetchUsersPage, fetchStats]);
 
-    // User account update (role and/or status)
     const handleUserUpdate = useCallback(
         async (userId, updates) => {
-            if (typeof updates === "string") {
-                await updateUserRole(userId, updates);
-            } else {
-                await updateUserAccount(userId, updates);
-            }
+            const payload = typeof updates === "string" ? { role: updates } : updates;
+            await updateUserAccount(userId, { ...payload, tenantId });
 
             if (isSearching) {
                 searchRequestRef.current += 1;

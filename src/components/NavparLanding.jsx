@@ -11,6 +11,7 @@ import { FaCar } from "react-icons/fa";
 import { RiLogoutBoxRLine } from "react-icons/ri";
 
 import { useAuth } from "@/context/AuthContext";
+import { useTenant } from "@/context/TenantContext";
 import { useI18n } from "@/i18n/i18n/context";
 import { logout as firebaseLogout } from "@/services/authService";
 
@@ -34,6 +35,8 @@ export default function NavbarLanding({
         user,
         canAccessDashboard,
     } = useAuth();
+
+    const { tenantName, tenantId, tenantSlug } = useTenant();
 
     const { t } = useI18n();
 
@@ -181,11 +184,13 @@ export default function NavbarLanding({
 
                         <div>
                             <h1 className="text-lg font-bold tracking-wide">
-                                Abu Hady
+                                {tenantName || t("Brand Name")}
                             </h1>
 
                             <p className="text-[9px] uppercase tracking-[0.2em] text-whatsapp sm:text-[10px]">
-                                Luxury Car Rental
+                                {tenantName
+                                    ? (locale === "ar" ? "لتأجير السيارات الفاخرة" : "Luxury Car Rental")
+                                    : (locale === "ar" ? "منصة تأجير السيارات" : "Car Rental Platform")}
                             </p>
                         </div>
                     </Link>
@@ -231,7 +236,7 @@ export default function NavbarLanding({
 
                         {!user && (
                             <Link
-                                to={`/${locale}/login`}
+                                to={`/${locale}/login${tenantSlug ? `?slug=${tenantSlug}` : (tenantId ? `?tenant=${tenantId}` : "")}`}
                                 className="rounded-xl border border-white/10 bg-white/10 px-5 py-2.5 text-sm transition hover:bg-white/15"
                             >
                                 {t("nav.login")}
@@ -369,7 +374,7 @@ export default function NavbarLanding({
 
                                 {!user && (
                                     <Link
-                                        to={`/${locale}/login`}
+                                        to={`/${locale}/login${tenantSlug ? `?slug=${tenantSlug}` : (tenantId ? `?tenant=${tenantId}` : "")}`}
                                         onClick={
                                             closeMenu
                                         }

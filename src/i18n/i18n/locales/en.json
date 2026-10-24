@@ -24,8 +24,8 @@
   "Login": "Login",
   "Book Now": "Book Now",
   "Book Now Action": "Book Now",
-  "Brand Name": "Abu Hady",
-  "Brand Tagline": "Luxury Car Rental",
+  "Brand Name": "SEKKA",
+  "Brand Tagline": "Smart Car Rental Platform",
   "Luxury Car Rental": "Luxury Car Rental",
   "Quick Links": "Quick Links",
   "All rights reserved": "All rights reserved.",
@@ -42,6 +42,9 @@
   "roles": {
     "super_admin": "Super Admin",
     "admin": "Admin",
+    "tenant_owner": "Merchant Owner",
+    "tenant_admin": "Merchant Admin",
+    "staff": "Staff",
     "driver": "Driver",
     "customer": "Customer"
   },

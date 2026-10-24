@@ -3,11 +3,13 @@ import {
     FaPhoneAlt,
     FaWhatsapp,
 } from "react-icons/fa";
+import { useTenant } from "@/context/TenantContext";
 
 export default function LandingFooter({
     isArabic,
     onScroll,
 }) {
+    const { tenantName } = useTenant();
     return (
         <footer className="border-t border-white/10 bg-[#08090D]">
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-12">
@@ -22,11 +24,13 @@ export default function LandingFooter({
 
                             <div>
                                 <h3 className="font-bold">
-                                    Abu Hady
+                                    {tenantName || "SEKKA - سِكّة"}
                                 </h3>
 
                                 <p className="text-[10px] text-whatsapp uppercase tracking-widest">
-                                    Luxury Car Rental
+                                    {tenantName
+                                        ? (isArabic ? "لتأجير السيارات" : "Luxury Car Rental")
+                                        : (isArabic ? "منصة تأجير السيارات الذكية" : "Car Rental Platform")}
                                 </p>
                             </div>
                         </div>
@@ -143,7 +147,7 @@ export default function LandingFooter({
                 <div className="border-t border-white/10 mt-10 pt-6 text-center text-sm text-gray-600">
                     ©{" "}
                     {new Date().getFullYear()}{" "}
-                    Abu Hady Luxury Car Rental.{" "}
+                    {tenantName ? `${tenantName}. ` : "منصة سِكّة - SEKKA لتأجير وإدارة السيارات. "}
                     {isArabic
                         ? "جميع الحقوق محفوظة."
                         : "All rights reserved."}

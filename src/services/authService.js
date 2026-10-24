@@ -16,6 +16,7 @@ import {
     doc,
     setDoc,
     getDoc,
+    updateDoc,
     serverTimestamp,
 } from "firebase/firestore";
 import { auth, db } from "../config/firebase";
@@ -24,47 +25,140 @@ import {
     getSearchFields,
     saveUserSearchFields,
 } from "./userUtils";
+import { resolveTenant } from "./tenantService";
 
 export const googleProvider = new GoogleAuthProvider();
 
-const getPublicTenantId = (tenantId) => {
-    if (tenantId) return tenantId;
+/**
+ * Resolves the effective merchant tenant ID from:
+ * 1. Explicit parameter (ID or slug)
+ * 2. URL search parameters (?tenant=... or ?slug=...)
+ * 3. Path (/t/:slug)
+ * 4. Stored session or local storage
+ * 5. Hostname (subdomain or custom domain)
+ * 6. Environment variable
+ */
+export const getPublicTenantId = async (tenantId = null) => {
+    // 1. Explicit argument
+    if (tenantId) {
+        const resolved = await resolveTenant(tenantId);
+        if (resolved) return resolved.id;
+    }
 
     if (typeof window === "undefined") return null;
 
-    const hostname = window.location.hostname;
-    if (hostname === "localhost" || hostname === "127.0.0.1") {
-        return import.meta.env.VITE_TENANT_ID || null;
+    // 2. URL query parameters
+    try {
+        const search = window.location.search;
+        if (search) {
+            const params = new URLSearchParams(search);
+            const queryVal = params.get("tenant") || params.get("slug");
+            if (queryVal && queryVal.trim()) {
+                const resolved = await resolveTenant(queryVal.trim());
+                if (resolved) {
+                    try {
+                        sessionStorage.setItem("sekka_tenant_id", resolved.id);
+                    } catch {}
+                    return resolved.id;
+                }
+            }
+        }
+    } catch {
+        // ignore
     }
 
-    const parts = hostname.split(".");
-    if (parts.length < 3 || ["www", "sekka"].includes(parts[0])) {
-        return import.meta.env.VITE_TENANT_ID || null;
+    // 3. Path parameter: /t/:slug or /merchant/:slug
+    try {
+        const pathname = window.location.pathname;
+        const match = pathname.match(/\/(?:t|merchant)\/([^/?#]+)/);
+        if (match && match[1]) {
+            const resolved = await resolveTenant(match[1]);
+            if (resolved) {
+                try {
+                    sessionStorage.setItem("sekka_tenant_id", resolved.id);
+                } catch {}
+                return resolved.id;
+            }
+        }
+    } catch {
+        // ignore
     }
 
-    return parts[0];
+    // 4. Stored active merchant in storage
+    try {
+        const stored = sessionStorage.getItem("sekka_tenant_id") || localStorage.getItem("sekka_tenant_id");
+        if (stored && stored.trim()) {
+            return stored.trim();
+        }
+    } catch {
+        // ignore
+    }
+
+    // 5. Hostname: subdomain or custom domain
+    try {
+        const hostname = window.location.hostname;
+        if (hostname && hostname !== "localhost" && hostname !== "127.0.0.1") {
+            const parts = hostname.split(".");
+            if (parts.length >= 3 && !["www", "sekka"].includes(parts[0])) {
+                const resolved = await resolveTenant(parts[0]);
+                if (resolved) return resolved.id;
+            }
+            if (parts.length >= 2 && !hostname.includes("sekka.") && !hostname.includes("firebaseapp.com") && !hostname.includes("web.app")) {
+                const resolved = await resolveTenant(hostname);
+                if (resolved) return resolved.id;
+            }
+        }
+    } catch {
+        // ignore
+    }
+
+    // 6. Optional env variable
+    if (import.meta.env.VITE_TENANT_ID && import.meta.env.VITE_TENANT_ID.trim()) {
+        const resolved = await resolveTenant(import.meta.env.VITE_TENANT_ID.trim());
+        if (resolved) return resolved.id;
+    }
+
+    return null;
 };
 
-const saveUserProfile = async (user, { name, phone = "" }) => {
+/**
+ * Saves user profile in root /users/{uid} document.
+ */
+const saveUserProfile = async (user, { name = "", phone = "", tenantId = null }) => {
     const userRef = doc(db, USERS_COLLECTION, user.uid);
     const existing = await getDoc(userRef);
 
+    const displayName = name || user.displayName || "مستخدم";
+    const userPhone = phone || user.phoneNumber || "";
+    const userEmail = user.email || "";
+
     if (existing.exists()) {
-        await saveUserSearchFields(user.uid, existing.data());
-        return existing.data();
+        const existingData = existing.data();
+        await saveUserSearchFields(user.uid, existingData);
+
+        // If user document is missing tenantId and we have one from the merchant, record it
+        if (!existingData.tenantId && tenantId) {
+            try {
+                await updateDoc(userRef, { tenantId, updatedAt: serverTimestamp() });
+            } catch (e) {
+                console.warn("Could not attach tenantId to existing user:", e);
+            }
+        }
+        return existingData;
     }
 
     const profile = {
         uid: user.uid,
-        name: name || user.displayName || "مستخدم",
-        email: user.email || "",
-        phone: phone || user.phoneNumber || "",
+        name: displayName,
+        email: userEmail,
+        phone: userPhone,
         role: "customer",
         status: "active",
+        tenantId: tenantId || "",
         ...getSearchFields({
-            name: name || user.displayName || "مستخدم",
-            email: user.email || "",
-            phone: phone || user.phoneNumber || "",
+            name: displayName,
+            email: userEmail,
+            phone: userPhone,
         }),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
@@ -74,30 +168,53 @@ const saveUserProfile = async (user, { name, phone = "" }) => {
     return profile;
 };
 
-const linkTenantCustomer = async (user, tenantId) => {
-    if (!tenantId) return;
+/**
+ * Links a customer to a merchant tenant subcollection:
+ * /tenants/{tenantId}/customers/{user.uid}
+ */
+export const linkTenantCustomer = async (user, tenantIdOrSlug) => {
+    if (!tenantIdOrSlug || !user?.uid) return;
 
-    const tenantRef = doc(db, "tenants", tenantId);
-    const tenantSnapshot = await getDoc(tenantRef);
+    try {
+        const tenant = await resolveTenant(tenantIdOrSlug);
+        if (!tenant || tenant.status !== "active") {
+            return;
+        }
 
-    if (!tenantSnapshot.exists() || tenantSnapshot.data()?.status !== "active") {
-        throw new Error("The selected tenant is unavailable.");
-    }
+        const tenantId = tenant.id;
+        const customerRef = doc(db, "tenants", tenantId, "customers", user.uid);
+        const customerSnapshot = await getDoc(customerRef);
 
-    const customerRef = doc(db, "tenants", tenantId, "customers", user.uid);
-    const customerSnapshot = await getDoc(customerRef);
-
-    if (!customerSnapshot.exists()) {
-        await setDoc(customerRef, {
+        const customerData = {
             uid: user.uid,
-            name: user.displayName || "",
+            name: user.displayName || user.name || "مستخدم",
             email: user.email || "",
-            phone: user.phoneNumber || "",
+            phone: user.phoneNumber || user.phone || "",
             role: "customer",
             status: "active",
-            createdAt: serverTimestamp(),
             updatedAt: serverTimestamp(),
-        });
+        };
+
+        if (!customerSnapshot.exists()) {
+            customerData.createdAt = serverTimestamp();
+            await setDoc(customerRef, customerData);
+        } else {
+            // Keep status/role if already set, but update basic contact info
+            await setDoc(customerRef, customerData, { merge: true });
+        }
+
+        // Also ensure root user profile records the tenantId
+        try {
+            const userRef = doc(db, USERS_COLLECTION, user.uid);
+            await updateDoc(userRef, {
+                tenantId,
+                updatedAt: serverTimestamp(),
+            });
+        } catch {
+            // ignore if user doc updated concurrently
+        }
+    } catch (error) {
+        console.error(`Error linking customer [${user?.uid}] to tenant:`, error);
     }
 };
 
@@ -113,8 +230,12 @@ export const registerWithEmail = async ({
 
     await updateProfile(user, { displayName: name || "" });
 
-    const profile = await saveUserProfile(user, { name, phone });
-    await linkTenantCustomer(user, getPublicTenantId(tenantId));
+    const effectiveTenantId = await getPublicTenantId(tenantId);
+    const profile = await saveUserProfile(user, { name, phone, tenantId: effectiveTenantId });
+
+    if (effectiveTenantId) {
+        await linkTenantCustomer(user, effectiveTenantId);
+    }
 
     try {
         await sendEmailVerification(user);
@@ -125,17 +246,28 @@ export const registerWithEmail = async ({
     return { ...user, profile };
 };
 
-export const loginWithEmail = async (email, password) => {
+export const loginWithEmail = async (email, password, tenantId = null) => {
     const result = await signInWithEmailAndPassword(auth, email, password);
+    const user = result.user;
 
     try {
-        const userRef = doc(db, USERS_COLLECTION, result.user.uid);
+        const userRef = doc(db, USERS_COLLECTION, user.uid);
         const userSnapshot = await getDoc(userRef);
         if (userSnapshot.exists()) {
-            await saveUserSearchFields(result.user.uid, userSnapshot.data());
+            await saveUserSearchFields(user.uid, userSnapshot.data());
         }
     } catch (error) {
         console.error("User search fields update error:", error);
+    }
+
+    // Link customer to tenant on login if accessing from merchant site
+    try {
+        const effectiveTenantId = await getPublicTenantId(tenantId);
+        if (effectiveTenantId) {
+            await linkTenantCustomer(user, effectiveTenantId);
+        }
+    } catch (error) {
+        console.warn("Tenant customer link on login warning:", error);
     }
 
     return result;
@@ -145,12 +277,17 @@ export const signInWithGoogle = async (tenantId = null) => {
     const result = await signInWithPopup(auth, googleProvider);
     const user = result.user;
 
+    const effectiveTenantId = await getPublicTenantId(tenantId);
+
     await saveUserProfile(user, {
         name: user.displayName || "مستخدم Google",
         phone: user.phoneNumber || "",
+        tenantId: effectiveTenantId,
     });
 
-    await linkTenantCustomer(user, getPublicTenantId(tenantId));
+    if (effectiveTenantId) {
+        await linkTenantCustomer(user, effectiveTenantId);
+    }
 
     return result;
 };

@@ -9,7 +9,14 @@ import { db } from "@/config/firebase";
 
 const AuthContext = createContext(null);
 
-const DASHBOARD_ROLES = ["tenant_owner", "tenant_admin", "driver"];
+const DASHBOARD_ROLES = [
+    "tenant_owner",
+    "tenant_admin",
+    "staff",
+    "driver",
+    "admin",
+    "super_admin",
+];
 
 export const AuthProvider = ({ children }) => {
     const [user, setUser] = useState(null);

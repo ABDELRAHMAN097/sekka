@@ -11,7 +11,9 @@ const ROLES = [
     ["all", "كل الأدوار"],
     ["customer", "عميل"],
     ["driver", "سائق"],
+    ["staff", "ستاف / موظف"],
     ["admin", "مدير"],
+    ["tenant_owner", "مالك النشاط"],
     ["super_admin", "مدير عام"],
 ];
 

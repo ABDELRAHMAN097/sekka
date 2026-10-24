@@ -3,12 +3,14 @@ import {
     FaArrowLeft,
     FaArrowRight,
 } from "react-icons/fa";
+import { useTenant } from "@/context/TenantContext";
 
 export default function LandingCTA({
     isArabic,
     heroContent,
     onAction,
 }) {
+    const { tenantName } = useTenant();
     return (
         <section
             id="contact"
@@ -39,9 +41,13 @@ export default function LandingCTA({
                             </h2>
 
                             <p className="mt-4 text-black/70 leading-7">
-                                {isArabic
-                                    ? "احجز سيارتك الآن واستمتع بتجربة أبو هادي."
-                                    : "Book your car today and experience Abu Hady Luxury."}
+                                {tenantName
+                                    ? (isArabic
+                                        ? `احجز سيارتك الآن واستمتع بتجربة ${tenantName}.`
+                                        : `Book your car today and experience ${tenantName}.`)
+                                    : (isArabic
+                                        ? "احجز سيارتك الآن واستمتع بتجربة سِكّة المتميزة."
+                                        : "Book your car today and experience SEKKA.")}
                             </p>
                         </div>
 

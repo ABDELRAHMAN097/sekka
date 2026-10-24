@@ -828,11 +828,6 @@ export default function SekkaMasterDashboard() {
                                                         <div>
                                                             <div className="font-bold text-white group-hover:text-emerald-400 transition flex items-center gap-1.5">
                                                                 <span>{tenant.name || "متجر بدون اسم"}</span>
-                                                                {tenant.id === "abu-hady" && (
-                                                                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 font-semibold">
-                                                                        التاجر الأول
-                                                                    </span>
-                                                                )}
                                                             </div>
                                                             <div className="text-xs text-gray-500 font-mono flex items-center gap-2 mt-0.5">
                                                                 <span>slug: {tenant.slug || tenant.id}</span>

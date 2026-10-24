@@ -10,10 +10,12 @@ import { Link, useNavigate, useParams } from "react-router-dom";
 import { toast } from "react-toastify";
 import { registerWithEmail, signInWithGoogle } from "@/services/authService";
 import { registerSchema } from "../../validations/authSchemas";
+import { useTenant } from "@/context/TenantContext";
 
 export default function Register() {
     const navigate = useNavigate();
     const { locale } = useParams();
+    const { tenantId, tenantName } = useTenant();
     const formik = useFormik({
         initialValues: {
             name: "",
@@ -35,6 +37,7 @@ export default function Register() {
                     email: values.email.trim(),
                     password: values.password,
                     phone: values.phone.trim(),
+                    tenantId: tenantId || null,
                 });
 
                 console.log("✅ Firebase registration success");
@@ -129,7 +132,7 @@ export default function Register() {
     //التسجيل بجوجل
     const handleGoogleSignUp = async () => {
         try {
-            await signInWithGoogle();
+            await signInWithGoogle(tenantId || null);
 
             toast.success("تم إنشاء الحساب بنجاح باستخدام Google");
         } catch (error) {
@@ -164,7 +167,11 @@ export default function Register() {
 
             <div className="w-full flex flex-col gap-2 items-start justify-start">
                 <h1 className="text-xl md:text-4xl font-bold text-white">
-                    انضم إلى <span className="text-accent">عالم ابو هادي</span>
+                    {tenantName ? (
+                        <>مرحباً بكم في <span className="text-accent">{tenantName}</span></>
+                    ) : (
+                        <>انضم إلى <span className="text-accent">منصة سِكّة</span></>
+                    )}
                 </h1>
 
                 <p className="text-text-secondary">
@@ -195,7 +202,7 @@ export default function Register() {
                             className="w-full bg-transparent outline-none border-none text-text-primary placeholder:text-text-muted"
                             type="text"
                             name="name"
-                            placeholder="حسين هادي"
+                            placeholder="محمد أحمد"
                             value={formik.values.name}
                             onChange={formik.handleChange}
                             onBlur={formik.handleBlur}

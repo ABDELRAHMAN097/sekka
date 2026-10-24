@@ -7,31 +7,84 @@ import {
     useCallback,
     useRef,
 } from "react";
-import { getTenant, calculateDaysRemaining } from "@/services/tenantService";
+import { resolveTenant, getTenant, calculateDaysRemaining } from "@/services/tenantService";
 import { useAuth } from "@/context/AuthContext";
 
 const TenantContext = createContext(null);
 const IMPERSONATION_KEY = "sekka_impersonated_tenant";
+const STORED_TENANT_KEY = "sekka_tenant_id";
 
-const detectTenantFromHostname = () => {
+/**
+ * Detects any merchant tenant identifier from:
+ * 1. URL search params (?tenant=... or ?slug=...)
+ * 2. URL pathname (/t/:slug or /merchant/:slug)
+ * 3. Stored session / local storage
+ * 4. Subdomain (e.g. sara.sekka.com)
+ * 5. Custom Domain (e.g. saracars.com)
+ * 6. VITE_TENANT_ID environment variable (if explicitly set)
+ */
+export const detectTenantIdentifier = () => {
     if (typeof window === "undefined") return null;
 
-    const hostname = window.location.hostname;
-
-    if (
-        hostname === "localhost" ||
-        hostname === "127.0.0.1"
-    ) {
-        return null;
+    // 1. URL Query parameters (?tenant=... or ?slug=...)
+    try {
+        const search = window.location.search;
+        if (search) {
+            const params = new URLSearchParams(search);
+            const queryVal = params.get("tenant") || params.get("slug");
+            if (queryVal && queryVal.trim()) {
+                return queryVal.trim();
+            }
+        }
+    } catch {
+        // ignore
     }
 
-    const parts = hostname.split(".");
+    // 2. Path parameter: /t/:slug or /merchant/:slug
+    try {
+        const pathname = window.location.pathname;
+        const pathMatch = pathname.match(/\/(?:t|merchant)\/([^/?#]+)/);
+        if (pathMatch && pathMatch[1] && pathMatch[1].trim()) {
+            return pathMatch[1].trim();
+        }
+    } catch {
+        // ignore
+    }
 
-    if (parts.length < 3) return null;
+    // 3. Stored active merchant from session/local storage
+    try {
+        const stored = sessionStorage.getItem(STORED_TENANT_KEY) || localStorage.getItem(STORED_TENANT_KEY);
+        if (stored && stored.trim()) {
+            return stored.trim();
+        }
+    } catch {
+        // ignore
+    }
 
-    const subdomain = parts[0];
+    // 4. Hostname: subdomain or custom domain
+    try {
+        const hostname = window.location.hostname;
+        if (hostname && hostname !== "localhost" && hostname !== "127.0.0.1") {
+            const parts = hostname.split(".");
+            // Subdomain (e.g. dealer.sekka.com)
+            if (parts.length >= 3 && !["www", "sekka"].includes(parts[0])) {
+                return parts[0];
+            }
+            // Custom domain (e.g. mydealership.com)
+            if (parts.length >= 2 && !hostname.includes("sekka.") && !hostname.includes("firebaseapp.com") && !hostname.includes("web.app")) {
+                return hostname;
+            }
+        }
+    } catch {
+        // ignore
+    }
 
-    return ["www", "sekka"].includes(subdomain) ? null : subdomain;
+    // 5. Environment variable
+    if (import.meta.env.VITE_TENANT_ID && import.meta.env.VITE_TENANT_ID.trim()) {
+        return import.meta.env.VITE_TENANT_ID.trim();
+    }
+
+    return null;
 };
 
 const getStoredImpersonatedTenant = () => {
@@ -55,19 +108,16 @@ export const TenantProvider = ({ children }) => {
 
     const requestIdRef = useRef(0);
 
-    const activeTenantId = isPlatformAdmin
-        ? impersonatedId ||
-          import.meta.env.VITE_TENANT_ID ||
-          detectTenantFromHostname()
-        : import.meta.env.VITE_TENANT_ID ||
-          detectTenantFromHostname() ||
-          profile?.tenantId ||
-          null;
+    const detectedId = detectTenantIdentifier();
 
-    const refreshTenant = useCallback(async (id = activeTenantId) => {
+    const activeIdentifier = isPlatformAdmin
+        ? impersonatedId || detectedId
+        : detectedId || profile?.tenantId || null;
+
+    const refreshTenant = useCallback(async (identifier = activeIdentifier) => {
         const requestId = ++requestIdRef.current;
 
-        if (!id) {
+        if (!identifier) {
             setTenantData(null);
             setLoading(false);
             return null;
@@ -76,11 +126,22 @@ export const TenantProvider = ({ children }) => {
         setLoading(true);
 
         try {
-            const data = await getTenant(id);
+            // resolveTenant handles doc ID, slug, and custom domain
+            const data = await resolveTenant(identifier);
 
             if (requestId !== requestIdRef.current) return null;
 
-            setTenantData(data);
+            if (data) {
+                setTenantData(data);
+                try {
+                    sessionStorage.setItem(STORED_TENANT_KEY, data.id);
+                    localStorage.setItem(STORED_TENANT_KEY, data.id);
+                } catch {
+                    // ignore
+                }
+            } else {
+                setTenantData(null);
+            }
             return data;
         } catch (error) {
             if (requestId === requestIdRef.current) {
@@ -94,15 +155,15 @@ export const TenantProvider = ({ children }) => {
                 setLoading(false);
             }
         }
-    }, [activeTenantId]);
+    }, [activeIdentifier]);
 
     useEffect(() => {
-        refreshTenant(activeTenantId);
+        refreshTenant(activeIdentifier);
 
         return () => {
             requestIdRef.current += 1;
         };
-    }, [activeTenantId, user?.uid, refreshTenant]);
+    }, [activeIdentifier, user?.uid, refreshTenant]);
 
     const switchTenant = useCallback((targetTenantId) => {
         if (
@@ -117,6 +178,7 @@ export const TenantProvider = ({ children }) => {
 
         try {
             sessionStorage.setItem(IMPERSONATION_KEY, tenantId);
+            sessionStorage.setItem(STORED_TENANT_KEY, tenantId);
         } catch (error) {
             console.error("Unable to save active tenant:", error);
             return false;
@@ -132,6 +194,8 @@ export const TenantProvider = ({ children }) => {
     const exitImpersonation = useCallback(() => {
         try {
             sessionStorage.removeItem(IMPERSONATION_KEY);
+            sessionStorage.removeItem(STORED_TENANT_KEY);
+            localStorage.removeItem(STORED_TENANT_KEY);
         } catch (error) {
             console.error("Unable to clear active tenant:", error);
         }
@@ -142,19 +206,21 @@ export const TenantProvider = ({ children }) => {
     }, []);
 
     const isModuleEnabled = useCallback((moduleKey) => {
-    if (loading || !tenantData || !moduleKey) {
-        return false;
-    }
+        if (loading || !tenantData || !moduleKey) {
+            return false;
+        }
 
-    return tenantData.modules?.[moduleKey] === true;
-}, [loading, tenantData]);
+        return tenantData.modules?.[moduleKey] === true;
+    }, [loading, tenantData]);
 
     const daysRemaining = calculateDaysRemaining(
         tenantData?.subscription?.endDate
     );
 
+    const effectiveTenantId = tenantData?.id || (isPlatformAdmin ? impersonatedId : null) || null;
+
     const value = {
-        tenantId: activeTenantId,
+        tenantId: effectiveTenantId,
         tenant: tenantData,
         loadingTenant: loading,
         isImpersonating: Boolean(
@@ -170,7 +236,8 @@ export const TenantProvider = ({ children }) => {
         daysRemaining,
         isExpiringSoon: daysRemaining <= 3 && daysRemaining > 0,
         isExpired: daysRemaining <= 0,
-        tenantName: tenantData?.name || activeTenantId || "",
+        tenantName: tenantData?.name || "",
+        tenantSlug: tenantData?.slug || "",
         tenantModules: tenantData?.modules || {},
         tenantSubscription: tenantData?.subscription || {},
     };

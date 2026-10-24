@@ -6,12 +6,15 @@ import {
     getDocs,
     setDoc,
     updateDoc,
+    deleteDoc,
+    query,
+    where,
     serverTimestamp,
 } from "firebase/firestore";
 import { db } from "../config/firebase";
 
 export const TENANTS_COLLECTION = "tenants";
-export const DEFAULT_TENANT_ID = import.meta.env.VITE_TENANT_ID || "abu-hady";
+export const DEFAULT_TENANT_ID = import.meta.env.VITE_TENANT_ID || "";
 
 export const DEFAULT_MODULES = {
     editLanding: true,
@@ -97,6 +100,143 @@ export const getTenant = async (tenantId) => {
     } catch (error) {
         console.error(`Error fetching tenant [${tenantId}]:`, error);
         throw error;
+    }
+};
+
+/**
+ * Resolves a tenant by either document ID, slug, or custom domain.
+ */
+export const resolveTenant = async (identifier) => {
+    if (!identifier || typeof identifier !== "string") return null;
+
+    const trimmed = identifier.trim();
+    if (!trimmed) return null;
+
+    try {
+        // 1. Direct document ID lookup
+        const docRef = doc(db, TENANTS_COLLECTION, trimmed);
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+            return normalizeTenant(docSnap);
+        }
+
+        // 2. Query by slug
+        const tenantsRef = collection(db, TENANTS_COLLECTION);
+        const slugQuery = query(tenantsRef, where("slug", "==", trimmed.toLowerCase()));
+        const slugSnap = await getDocs(slugQuery);
+        if (!slugSnap.empty) {
+            return normalizeTenant(slugSnap.docs[0]);
+        }
+
+        // 3. Query by domain
+        const domainQuery = query(tenantsRef, where("domain", "==", trimmed.toLowerCase()));
+        const domainSnap = await getDocs(domainQuery);
+        if (!domainSnap.empty) {
+            return normalizeTenant(domainSnap.docs[0]);
+        }
+
+        return null;
+    } catch (error) {
+        console.error(`Error resolving tenant [${identifier}]:`, error);
+        return null;
+    }
+};
+
+export const getTenantBySlug = async (slug) => {
+    if (!slug) return null;
+    return resolveTenant(slug);
+};
+
+export const getTenantByDomain = async (domain) => {
+    if (!domain) return null;
+    return resolveTenant(domain);
+};
+
+/**
+ * Subcollection: /tenants/{tenantId}/customers
+ */
+export const getTenantCustomers = async (tenantId) => {
+    if (!tenantId) return [];
+    try {
+        const customersRef = collection(db, TENANTS_COLLECTION, tenantId, "customers");
+        const snap = await getDocs(customersRef);
+        return snap.docs.map((d) => ({ id: d.id, uid: d.id, ...d.data() }));
+    } catch (error) {
+        console.error(`Error fetching customers for tenant [${tenantId}]:`, error);
+        return [];
+    }
+};
+
+/**
+ * Subcollection: /tenants/{tenantId}/members
+ */
+export const getTenantMembers = async (tenantId) => {
+    if (!tenantId) return [];
+    try {
+        const membersRef = collection(db, TENANTS_COLLECTION, tenantId, "members");
+        const snap = await getDocs(membersRef);
+        return snap.docs.map((d) => ({ id: d.id, uid: d.id, ...d.data() }));
+    } catch (error) {
+        console.error(`Error fetching members for tenant [${tenantId}]:`, error);
+        return [];
+    }
+};
+
+export const addTenantCustomer = async (tenantId, customerData) => {
+    if (!tenantId || !customerData?.uid) return false;
+    try {
+        const customerRef = doc(db, TENANTS_COLLECTION, tenantId, "customers", customerData.uid);
+        await setDoc(customerRef, {
+            ...customerData,
+            role: customerData.role || "customer",
+            status: customerData.status || "active",
+            createdAt: customerData.createdAt || serverTimestamp(),
+            updatedAt: serverTimestamp(),
+        }, { merge: true });
+        return true;
+    } catch (error) {
+        console.error(`Error adding customer to tenant [${tenantId}]:`, error);
+        return false;
+    }
+};
+
+export const addTenantMember = async (tenantId, memberData) => {
+    if (!tenantId || !memberData?.uid) return false;
+    try {
+        const memberRef = doc(db, TENANTS_COLLECTION, tenantId, "members", memberData.uid);
+        await setDoc(memberRef, {
+            ...memberData,
+            role: memberData.role || "staff",
+            status: memberData.status || "active",
+            createdAt: memberData.createdAt || serverTimestamp(),
+            updatedAt: serverTimestamp(),
+        }, { merge: true });
+        return true;
+    } catch (error) {
+        console.error(`Error adding member to tenant [${tenantId}]:`, error);
+        return false;
+    }
+};
+
+export const removeTenantCustomer = async (tenantId, customerId) => {
+    if (!tenantId || !customerId) return false;
+    try {
+        await deleteDoc(doc(db, TENANTS_COLLECTION, tenantId, "customers", customerId));
+        return true;
+    } catch (error) {
+        console.error(`Error removing customer [${customerId}] from tenant [${tenantId}]:`, error);
+        return false;
+    }
+};
+
+export const removeTenantMember = async (tenantId, memberId) => {
+    if (!tenantId || !memberId) return false;
+    try {
+        await deleteDoc(doc(db, TENANTS_COLLECTION, tenantId, "members", memberId));
+        return true;
+    } catch (error) {
+        console.error(`Error removing member [${memberId}] from tenant [${tenantId}]:`, error);
+        return false;
     }
 };
 
@@ -384,10 +524,8 @@ export const initializeTenantLanding = async (
 
         const displayName =
             tenantName ||
-            tenantSnap.data().name ||
-            (tenantId === "abu-hady"
-                ? "أبو هادي لخدمات الليموزين"
-                : tenantId);
+            tenantSnap.data()?.name ||
+            "متجر سِكّة لتأجير السيارات";
 
         await setDoc(landingDocRef, {
             hero: {

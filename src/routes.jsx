@@ -40,6 +40,10 @@ export const routes = [
                 element: <LandingPage />,
             },
             {
+                path: "t/:tenantSlug",
+                element: <LandingPage />,
+            },
+            {
                 element: <AuthLayout />,
                 children: [
                     {
@@ -112,6 +116,8 @@ export const routes = [
                                         allowedRoles={[
                                             "admin",
                                             "super_admin",
+                                            "tenant_owner",
+                                            "tenant_admin",
                                         ]}
                                     />
                                 ),
@@ -134,6 +140,8 @@ export const routes = [
                                             allowedRoles={[
                                                 "admin",
                                                 "super_admin",
+                                                "tenant_owner",
+                                                "tenant_admin",
                                             ]}
                                         />
                                     </ModuleGuard>
@@ -147,6 +155,8 @@ export const routes = [
                                             allowedRoles={[
                                                 "admin",
                                                 "super_admin",
+                                                "tenant_owner",
+                                                "tenant_admin",
                                             ]}
                                         />
                                     </ModuleGuard>

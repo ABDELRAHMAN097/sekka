@@ -180,13 +180,19 @@ const demoGallery = [
 ========================================================= */
 
 export default function LandingPage() {
-    const { locale = "en" } = useParams();
+    const { locale = "en", tenantSlug } = useParams();
     const navigate = useNavigate();
     const location = useLocation();
     const { user } = useAuth();
-    const { tenantId, tenantName } = useTenant();
+    const { tenantId, tenantName, refreshTenant } = useTenant();
 
     const isArabic = locale === "ar";
+
+    useEffect(() => {
+        if (tenantSlug) {
+            refreshTenant(tenantSlug);
+        }
+    }, [tenantSlug, refreshTenant]);
 
     // Immediate hydration from cache to prevent layout shift & save reads
     const [landing, setLanding] = useState(() => getCachedLandingData(tenantId));
@@ -341,9 +347,13 @@ export default function LandingPage() {
                     </div>
 
                     <p className="text-gray-400">
-                        {isArabic
-                            ? "جاري تحميل تجربة أبو هادي..."
-                            : "Loading Abu Hady Experience..."}
+                        {tenantName
+                            ? (isArabic
+                                ? `جاري تحميل تجربة ${tenantName}...`
+                                : `Loading ${tenantName} Experience...`)
+                            : (isArabic
+                                ? "جاري تحميل تجربة سِكّة..."
+                                : "Loading SEKKA Experience...")}
                     </p>
                 </div>
             </div>

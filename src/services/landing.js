@@ -171,15 +171,18 @@ export const normalizeLandingData = (data = {}) => {
    MULTI-TENANT DOCUMENT REFERENCES & CACHE SETTINGS
 ========================================================= */
 
-const legacyLandingRef = doc(db, "landingPage", "settings");
+const platformLandingRef = doc(db, "landingPage", "settings");
 
-export const getLandingDocRef = (tenantId = "abu-hady") => {
-    const effectiveTenantId = tenantId || import.meta.env.VITE_TENANT_ID || "abu-hady";
+export const getLandingDocRef = (tenantId = null) => {
+    const effectiveTenantId = tenantId || import.meta.env.VITE_TENANT_ID || null;
+    if (!effectiveTenantId) {
+        return platformLandingRef;
+    }
     return doc(db, "tenants", effectiveTenantId, "config", "landing");
 };
 
-const getCacheKey = (tenantId = "abu-hady") => {
-    const id = tenantId || import.meta.env.VITE_TENANT_ID || "abu-hady";
+const getCacheKey = (tenantId = null) => {
+    const id = tenantId || import.meta.env.VITE_TENANT_ID || "platform";
     return `sekka_landing_cache_${id}_v2`;
 };
 
@@ -192,7 +195,7 @@ const memoryCacheTimestamps = {};
    LOCAL / STORAGE CACHE HELPERS (PER TENANT)
 ========================================================= */
 
-const getStorageCache = (tenantId = "abu-hady") => {
+const getStorageCache = (tenantId = null) => {
     if (typeof window === "undefined") return null;
     try {
         const key = getCacheKey(tenantId);
@@ -208,7 +211,7 @@ const getStorageCache = (tenantId = "abu-hady") => {
     return null;
 };
 
-const setStorageCache = (data, tenantId = "abu-hady") => {
+const setStorageCache = (data, tenantId = null) => {
     if (typeof window === "undefined") return;
     try {
         const key = getCacheKey(tenantId);
@@ -224,8 +227,8 @@ const setStorageCache = (data, tenantId = "abu-hady") => {
     }
 };
 
-export const getCachedLandingData = (tenantId = "abu-hady") => {
-    const id = tenantId || "abu-hady";
+export const getCachedLandingData = (tenantId = null) => {
+    const id = tenantId || "platform";
     const mem = memoryCacheMap[id];
     const timestamp = memoryCacheTimestamps[id] || 0;
     if (mem && Date.now() - timestamp < CACHE_TTL_MS) {
@@ -240,8 +243,8 @@ export const getCachedLandingData = (tenantId = "abu-hady") => {
     return null;
 };
 
-export const invalidateLandingCache = (tenantId = "abu-hady") => {
-    const id = tenantId || "abu-hady";
+export const invalidateLandingCache = (tenantId = null) => {
+    const id = tenantId || "platform";
     delete memoryCacheMap[id];
     delete memoryCacheTimestamps[id];
     if (typeof window !== "undefined") {
@@ -254,11 +257,11 @@ export const invalidateLandingCache = (tenantId = "abu-hady") => {
 };
 
 /* =========================================================
-   GET LANDING PAGE (PER TENANT, CACHED, AUTO-MIGRATES ABU HADY)
+   GET LANDING PAGE (PER TENANT, CACHED)
 ========================================================= */
 
-export const getLandingPage = async ({ forceRefresh = false, tenantId = "abu-hady" } = {}) => {
-    const effectiveTenantId = tenantId || import.meta.env.VITE_TENANT_ID || "abu-hady";
+export const getLandingPage = async ({ forceRefresh = false, tenantId = null } = {}) => {
+    const effectiveTenantId = tenantId || import.meta.env.VITE_TENANT_ID || null;
 
     // 1. Check Cache first to avoid consuming Firestore read quota
     if (!forceRefresh) {
@@ -269,25 +272,15 @@ export const getLandingPage = async ({ forceRefresh = false, tenantId = "abu-had
     }
 
     try {
-        const tenantLandingRef = getLandingDocRef(effectiveTenantId);
-        let snapshot = await getDoc(tenantLandingRef);
+        const landingDocRef = getLandingDocRef(effectiveTenantId);
+        let snapshot = await getDoc(landingDocRef);
 
-        // Fallback for primary tenant (abu-hady) from legacy path landingPage/settings
-        if (!snapshot.exists() && effectiveTenantId === "abu-hady") {
-            const legacySnapshot = await getDoc(legacyLandingRef);
-            if (legacySnapshot.exists()) {
-                const legacyData = normalizeLandingData(legacySnapshot.data());
-                // Auto-migrate legacy data to the tenant subcollection
-                setDoc(tenantLandingRef, {
-                    ...legacyData,
-                    updatedAt: serverTimestamp(),
-                }, { merge: true }).catch((err) =>
-                    console.warn("Auto-migration of legacy landing data warning:", err)
-                );
-                memoryCacheMap[effectiveTenantId] = legacyData;
-                memoryCacheTimestamps[effectiveTenantId] = Date.now();
-                setStorageCache(legacyData, effectiveTenantId);
-                return legacyData;
+        // Fallback to platform settings if tenant landing isn't configured yet
+        if (!snapshot.exists() && effectiveTenantId) {
+            const platformSnap = await getDoc(platformLandingRef);
+            if (platformSnap.exists()) {
+                const platformData = normalizeLandingData(platformSnap.data());
+                return platformData;
             }
         }
 
@@ -313,15 +306,15 @@ export const getLandingPage = async ({ forceRefresh = false, tenantId = "abu-had
    SAVE LANDING PAGE (ISOLATED PER TENANT)
 ========================================================= */
 
-export const saveLandingPage = async (data, { tenantId = "abu-hady" } = {}) => {
-    const effectiveTenantId = tenantId || import.meta.env.VITE_TENANT_ID || "abu-hady";
+export const saveLandingPage = async (data, { tenantId = null } = {}) => {
+    const effectiveTenantId = tenantId || import.meta.env.VITE_TENANT_ID || null;
 
     try {
         const normalizedData = normalizeLandingData(data);
-        const tenantLandingRef = getLandingDocRef(effectiveTenantId);
+        const landingDocRef = getLandingDocRef(effectiveTenantId);
 
         await setDoc(
-            tenantLandingRef,
+            landingDocRef,
             {
                 ...normalizedData,
                 updatedAt: serverTimestamp(),
@@ -329,27 +322,16 @@ export const saveLandingPage = async (data, { tenantId = "abu-hady" } = {}) => {
             { merge: true }
         );
 
-        // If saving for abu-hady, mirror to legacy location for safety
-        if (effectiveTenantId === "abu-hady") {
-            setDoc(
-                legacyLandingRef,
-                {
-                    ...normalizedData,
-                    updatedAt: serverTimestamp(),
-                },
-                { merge: true }
-            ).catch((err) => console.warn("Mirroring to legacy landing error:", err));
-        }
-
         // Update local caches immediately
-        memoryCacheMap[effectiveTenantId] = normalizedData;
-        memoryCacheTimestamps[effectiveTenantId] = Date.now();
+        const cacheId = effectiveTenantId || "platform";
+        memoryCacheMap[cacheId] = normalizedData;
+        memoryCacheTimestamps[cacheId] = Date.now();
         setStorageCache(normalizedData, effectiveTenantId);
 
         // Notify active windows/components
         if (typeof window !== "undefined") {
             window.dispatchEvent(
-                new CustomEvent(`landingPageUpdated_${effectiveTenantId}`, {
+                new CustomEvent(`landingPageUpdated_${cacheId}`, {
                     detail: normalizedData,
                 })
             );
@@ -362,7 +344,7 @@ export const saveLandingPage = async (data, { tenantId = "abu-hady" } = {}) => {
 
         return true;
     } catch (error) {
-        console.error(`Error saving landing page for [${effectiveTenantId}]:`, error);
+        console.error(`Error saving landing page for [${effectiveTenantId || "platform"}]:`, error);
         throw error;
     }
 };
@@ -371,8 +353,9 @@ export const saveLandingPage = async (data, { tenantId = "abu-hady" } = {}) => {
    REAL-TIME LANDING PAGE (PER TENANT)
 ========================================================= */
 
-export const subscribeToLandingPage = (callback, onError, { tenantId = "abu-hady" } = {}) => {
-    const effectiveTenantId = tenantId || import.meta.env.VITE_TENANT_ID || "abu-hady";
+export const subscribeToLandingPage = (callback, onError, { tenantId = null } = {}) => {
+    const effectiveTenantId = tenantId || import.meta.env.VITE_TENANT_ID || null;
+    const cacheId = effectiveTenantId || "platform";
 
     // Immediately emit cached data to avoid visual loading lag
     const cached = getCachedLandingData(effectiveTenantId);
@@ -380,26 +363,26 @@ export const subscribeToLandingPage = (callback, onError, { tenantId = "abu-hady
         callback(cached);
     }
 
-    const tenantLandingRef = getLandingDocRef(effectiveTenantId);
+    const landingDocRef = getLandingDocRef(effectiveTenantId);
 
     return onSnapshot(
-        tenantLandingRef,
+        landingDocRef,
         async (snapshot) => {
             if (snapshot.exists()) {
                 const data = normalizeLandingData(snapshot.data());
-                memoryCacheMap[effectiveTenantId] = data;
-                memoryCacheTimestamps[effectiveTenantId] = Date.now();
+                memoryCacheMap[cacheId] = data;
+                memoryCacheTimestamps[cacheId] = Date.now();
                 setStorageCache(data, effectiveTenantId);
                 callback(data);
-            } else if (effectiveTenantId === "abu-hady") {
-                // If subcollection doc doesn't exist yet, check legacy doc
+            } else if (effectiveTenantId) {
+                // If tenant landing doc doesn't exist yet, check platform settings doc
                 try {
-                    const legacySnap = await getDoc(legacyLandingRef);
-                    const data = legacySnap.exists()
-                        ? normalizeLandingData(legacySnap.data())
+                    const platformSnap = await getDoc(platformLandingRef);
+                    const data = platformSnap.exists()
+                        ? normalizeLandingData(platformSnap.data())
                         : defaultLandingData;
-                    memoryCacheMap[effectiveTenantId] = data;
-                    memoryCacheTimestamps[effectiveTenantId] = Date.now();
+                    memoryCacheMap[cacheId] = data;
+                    memoryCacheTimestamps[cacheId] = Date.now();
                     setStorageCache(data, effectiveTenantId);
                     callback(data);
                 } catch {
@@ -410,7 +393,7 @@ export const subscribeToLandingPage = (callback, onError, { tenantId = "abu-hady
             }
         },
         (error) => {
-            console.error(`Landing realtime error for [${effectiveTenantId}]:`, error);
+            console.error(`Landing realtime error for [${cacheId}]:`, error);
             if (onError) onError(error);
         }
     );

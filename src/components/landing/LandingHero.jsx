@@ -95,7 +95,7 @@ export default function LandingHero({
                         src={heroImage}
                         alt={
                             hero?.image?.alt ||
-                            "Abu Hady Luxury Car"
+                            "SEKKA Luxury Car"
                         }
                         className="w-full h-full object-cover"
                     />

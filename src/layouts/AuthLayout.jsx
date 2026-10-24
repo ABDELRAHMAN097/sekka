@@ -8,33 +8,38 @@ export default function AuthRegisterLayout({ children, title, subtitle }) {
     >
       <header className="shrink-0 px-6 py-4 md:px-12 flex items-center justify-between z-20">
         <div className="flex items-center gap-3">
-          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-[#10B981] to-[#D4AF37] p-[2px] shadow-lg shadow-[#10B981]/20">
-            <div className="w-full h-full bg-[#111827] rounded-[10px] flex items-center justify-center font-bold text-xl text-[#D4AF37]">
-              أ
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-[#10B981] to-[#059669] p-[2px] shadow-lg shadow-[#10B981]/20">
+            <div className="w-full h-full bg-[#111827] rounded-[10px] flex items-center justify-center font-black text-xl text-[#10B981]">
+              S
             </div>
           </div>
 
           <div>
-            <h1 className="text-xl font-black tracking-wider text-white">
-              أبو هادي
-            </h1>
+            <div className="flex items-center gap-2">
+              <h1 className="text-xl font-black tracking-wider text-white">
+                سِكّة
+              </h1>
+              <span className="text-xs font-bold px-1.5 py-0.5 rounded bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">
+                SEKKA
+              </span>
+            </div>
 
-            <p className="text-[10px] text-[#D4AF37] tracking-widest font-semibold uppercase">
-              LUXURY CAR RENTAL
+            <p className="text-[10px] text-[#9CA3AF] tracking-widest font-semibold uppercase">
+              منصة تأجير السيارات الذكية
             </p>
           </div>
         </div>
 
         <a
-          href="https://wa.me/201026116087"
+          href="https://wa.me/201025847570"
           target="_blank"
           rel="noreferrer"
           className="flex items-center gap-2 bg-[#111827] hover:bg-[#1F2937] border border-[#374151] hover:border-[#25D366] text-xs px-4 py-2 rounded-xl transition-all group"
         >
-          <span className="w-2 rounded-full bg-[#25D366] animate-pulse" />
+          <span className="w-2 h-2 rounded-full bg-[#25D366] animate-pulse" />
 
           <span className="text-[#9CA3AF] group-hover:text-white transition-colors">
-            الدعم الفوري
+            الدعم الفني
           </span>
         </a>
       </header>
@@ -49,7 +54,7 @@ export default function AuthRegisterLayout({ children, title, subtitle }) {
             
             <div className="absolute top-0 right-0 w-96 h-96 bg-[#10b98148] rounded-full blur-3xl pointer-events-none" />
 
-            <div className="absolute bottom-0 left-0 w-96 h-96 bg-[#d4af373d] rounded-full blur-3xl pointer-events-none" />
+            <div className="absolute bottom-0 left-0 w-96 h-96 bg-[#10b98120] rounded-full blur-3xl pointer-events-none" />
 
             <div
               className="absolute inset-0 opacity-40 mix-blend-luminosity bg-cover bg-center pointer-events-none"
@@ -62,24 +67,24 @@ export default function AuthRegisterLayout({ children, title, subtitle }) {
             <div className="absolute inset-0 bg-gradient-to-t from-[#0F172A] via-[#0F172A]/70 to-transparent" />
 
             <div className="relative z-10 self-start">
-              <span className="inline-flex items-center gap-2 bg-[#1F2937]/80 backdrop-blur-md border border-[#D4AF37]/30 text-[#D4AF37] px-4 py-1.5 rounded-full text-xs font-semibold">
+              <span className="inline-flex items-center gap-2 bg-[#1F2937]/80 backdrop-blur-md border border-emerald-500/30 text-emerald-400 px-4 py-1.5 rounded-full text-xs font-semibold">
                 <span>✦</span>
-                تجربة قيادة لا تُنسى في مصر
+                منصة سِكّة - عالم تأجير السيارات المتكامل
               </span>
             </div>
 
             <div className="relative z-10 mt-auto">
               <blockquote className="text-xl font-bold text-white leading-relaxed mb-4">
-                "أسطول من أفخم السيارات الرياضية والرئاسية في انتظارك.. رفاهية تليق بمكانتك."
+                "بوابتك الذكية لتأجير السيارات وإدارة أساطيل النقل والليموزين بأعلى درجات الرفاهية والأمان."
               </blockquote>
 
               <div className="flex items-center gap-4 text-xs text-[#9CA3AF]">
-                <div className="flex items-center gap-1 text-[#D4AF37]">
+                <div className="flex items-center gap-1 text-emerald-400">
                   ★ ★ ★ ★ ★
                 </div>
 
                 <span>
-                  خيار صفوة المجتمع لخدمات الليموزين وتأجير السيارات الفارهة
+                  المنصة الرائدة لخدمات تأجير السيارات وإدارة المتاجر في مصر
                 </span>
               </div>
             </div>
@@ -89,7 +94,7 @@ export default function AuthRegisterLayout({ children, title, subtitle }) {
 
       {/* Footer */}
       <footer className="shrink-0 px-6 py-3 text-center text-xs text-[#6B7280]">
-        &copy; {new Date().getFullYear()} أبو هادي لتأجير السيارات الفاخرة. جميع الحقوق محفوظة.
+        &copy; {new Date().getFullYear()} منصة سِكّة - SEKKA لتأجير وإدارة السيارات. جميع الحقوق محفوظة.
       </footer>
     </div>
   );

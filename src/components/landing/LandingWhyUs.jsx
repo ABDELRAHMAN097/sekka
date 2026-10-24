@@ -2,11 +2,13 @@ import {
     FaCheckCircle,
     FaStar,
 } from "react-icons/fa";
+import { useTenant } from "@/context/TenantContext";
 
 export default function LandingWhyUs({
     isArabic,
     heroImage,
 }) {
+    const { tenantName } = useTenant();
     const features = [
         isArabic
             ? "سيارات فاخرة"
@@ -33,9 +35,9 @@ export default function LandingWhyUs({
                 <div className="grid lg:grid-cols-2 gap-12 lg:gap-14 items-center">
                     <div>
                         <span className="text-whatsapp text-xs sm:text-sm font-semibold uppercase tracking-widest">
-                            {isArabic
-                                ? "لماذا أبو هادي؟"
-                                : "Why Abu Hady"}
+                            {tenantName
+                                ? (isArabic ? `لماذا ${tenantName}؟` : `Why ${tenantName}?`)
+                                : (isArabic ? "لماذا سِكّة؟" : "Why SEKKA?")}
                         </span>
 
                         <h2 className="text-3xl sm:text-4xl lg:text-5xl font-bold mt-3 leading-tight">
@@ -74,7 +76,7 @@ export default function LandingWhyUs({
                         <div className="relative rounded-3xl overflow-hidden border border-white/10 group">
                             <img
                                 src={heroImage}
-                                alt="Abu Hady Luxury"
+                                alt={tenantName || "SEKKA Luxury"}
                                 className="abu-image w-full h-[300px] sm:h-[380px] lg:h-[420px] object-cover"
                             />
 
@@ -84,7 +86,7 @@ export default function LandingWhyUs({
                                 <div className="flex items-center justify-between gap-4">
                                     <div>
                                         <p className="text-xs text-whatsapp uppercase tracking-widest">
-                                            Abu Hady
+                                            {tenantName || "SEKKA"}
                                         </p>
 
                                         <h3 className="text-2xl font-bold">

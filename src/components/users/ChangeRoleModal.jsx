@@ -12,6 +12,7 @@ import {
 const ROLES = [
     ["customer", "عميل"],
     ["driver", "سائق"],
+    ["staff", "ستاف / موظف"],
     ["admin", "مدير"],
     ["super_admin", "سوبر ادمن"],
 ];

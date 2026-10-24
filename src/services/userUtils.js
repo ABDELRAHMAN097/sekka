@@ -133,7 +133,7 @@ export const mapUser = (docSnap) => {
     return {
         id: docSnap.id,
         ...data,
-        tenantId: data.tenantId || "abu-hady",
+        tenantId: data.tenantId || "",
     };
 };
 

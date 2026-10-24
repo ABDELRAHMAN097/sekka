@@ -24,8 +24,8 @@
   "Login": "تسجيل الدخول",
   "Book Now": "احجز سيارتك",
   "Book Now Action": "احجز الآن",
-  "Brand Name": "أبو هادي",
-  "Brand Tagline": "Luxury Car Rental",
+  "Brand Name": "سِكّة",
+  "Brand Tagline": "منصة تأجير السيارات الذكية",
   "Luxury Car Rental": "تأجير سيارات فاخرة",
   "Quick Links": "روابط سريعة",
   "All rights reserved": "جميع الحقوق محفوظة.",
@@ -42,6 +42,9 @@
   "roles": {
     "super_admin": "سوبر أدمن",
     "admin": "أدمن",
+    "tenant_owner": "مالك النشاط",
+    "tenant_admin": "مسؤول المتجر",
+    "staff": "موظف / ستاف",
     "driver": "سائق",
     "customer": "عميل"
   },

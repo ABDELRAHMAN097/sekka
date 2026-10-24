@@ -12,13 +12,18 @@ import {
 } from "@/services/authService";
 import { getUserProfile } from "@/services/profileService";
 import { loginSchema } from "@/validations/authSchemas";
+import { useTenant } from "@/context/TenantContext";
 export default function Login() {
     const [showPassword, setShowPassword] = useState(false);
     const navigate = useNavigate();
     const { locale = "en" } = useParams();
+    const { tenantId } = useTenant();
     const DASHBOARD_ROLES = [
         "admin",
         "super_admin",
+        "tenant_owner",
+        "tenant_admin",
+        "staff",
         "driver",
     ];
     const formik = useFormik({
@@ -31,7 +36,8 @@ export default function Login() {
             try {
                 const userCredential = await loginWithEmail(
                     values.email.trim(),
-                    values.password
+                    values.password,
+                    tenantId || null
                 );
                 const firebaseUser = userCredential.user;
                 const profile = await getUserProfile(
@@ -101,7 +107,7 @@ export default function Login() {
     });
     const handleGoogleSignIn = async () => {
         try {
-            const result = await signInWithGoogle();
+            const result = await signInWithGoogle(tenantId || null);
             console.log(
                 "✅ Google authentication success:",
                 result.user

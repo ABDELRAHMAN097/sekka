@@ -1,6 +1,9 @@
 import {
     collection,
     getDocs,
+    getDoc,
+    setDoc,
+    deleteDoc,
     doc,
     updateDoc,
     query,
@@ -24,7 +27,68 @@ import {
 } from "./userUtils";
 
 /**
- * Fetches paginated users with optional role and status filters.
+ * Helper to fetch and merge tenant customers & members
+ */
+const getTenantUsersList = async (tenantId) => {
+    if (!tenantId || tenantId === "all") return [];
+
+    try {
+        const [customersSnap, membersSnap] = await Promise.all([
+            getDocs(collection(db, "tenants", tenantId, "customers")),
+            getDocs(collection(db, "tenants", tenantId, "members")),
+        ]);
+
+        const usersMap = new Map();
+
+        // 1. Process customers
+        customersSnap.docs.forEach((d) => {
+            const data = d.data() || {};
+            usersMap.set(d.id, {
+                id: d.id,
+                uid: d.id,
+                name: data.name || data.displayName || "",
+                email: data.email || "",
+                phone: data.phone || data.phoneNumber || "",
+                role: data.role || "customer",
+                status: data.status || "active",
+                createdAt: data.createdAt || null,
+                tenantId,
+                isCustomer: true,
+                isMember: false,
+            });
+        });
+
+        // 2. Process members (staff, drivers, tenant_owner, admin)
+        membersSnap.docs.forEach((d) => {
+            const data = d.data() || {};
+            const existing = usersMap.get(d.id) || {};
+            usersMap.set(d.id, {
+                ...existing,
+                id: d.id,
+                uid: d.id,
+                name: data.name || existing.name || "",
+                email: data.email || existing.email || "",
+                phone: data.phone || existing.phone || "",
+                role: data.role || "staff",
+                status: data.status || existing.status || "active",
+                createdAt: data.createdAt || existing.createdAt || null,
+                tenantId,
+                isCustomer: false,
+                isMember: true,
+            });
+        });
+
+        return Array.from(usersMap.values());
+    } catch (error) {
+        console.error(`Error loading users for tenant [${tenantId}]:`, error);
+        return [];
+    }
+};
+
+/**
+ * Fetches paginated users.
+ * - If tenantId is provided: fetches from /tenants/{tenantId}/customers & /members
+ * - If no tenantId: fetches from root /users collection
  */
 export const getAllUsers = async ({
     pageSize = DEFAULT_PAGE_SIZE,
@@ -34,13 +98,43 @@ export const getAllUsers = async ({
     tenantId = null,
 } = {}) => {
     try {
-        const usersRef = collection(db, USERS_COLLECTION);
-
         const safePageSize = Math.min(
             Math.max(Number(pageSize) || DEFAULT_PAGE_SIZE, 1),
             MAX_PAGE_SIZE
         );
 
+        // Merchant-specific query (Customers & Members)
+        if (tenantId && tenantId !== "all") {
+            const allTenantUsers = await getTenantUsersList(tenantId);
+
+            // Filter by role and status
+            const filtered = allTenantUsers.filter((u) => {
+                if (role && role !== "all") {
+                    const uRole = String(u.role || "").toLowerCase();
+                    if (uRole !== role.toLowerCase()) return false;
+                }
+                if (status && status !== "all") {
+                    const uStatus = String(u.status || "").toLowerCase();
+                    if (uStatus !== status.toLowerCase()) return false;
+                }
+                return true;
+            });
+
+            // Pagination over filtered array
+            const startIndex = cursor && typeof cursor === "number" ? cursor : 0;
+            const pageUsers = filtered.slice(startIndex, startIndex + safePageSize);
+            const nextCursor = startIndex + safePageSize < filtered.length ? startIndex + safePageSize : null;
+            const hasNextPage = startIndex + safePageSize < filtered.length;
+
+            return {
+                users: pageUsers,
+                lastDoc: nextCursor,
+                hasNextPage,
+            };
+        }
+
+        // Platform-wide Super Admin query (root /users)
+        const usersRef = collection(db, USERS_COLLECTION);
         const constraints = [];
 
         if (role && role !== "all") {
@@ -49,10 +143,6 @@ export const getAllUsers = async ({
 
         if (status && status !== "all") {
             constraints.push(where("status", "==", status));
-        }
-
-        if (tenantId && tenantId !== "all") {
-            constraints.push(where("tenantId", "==", tenantId));
         }
 
         constraints.push(orderBy(documentId(), "asc"));
@@ -73,12 +163,7 @@ export const getAllUsers = async ({
                 queryErr
             );
 
-            const fallbackConstraints = [];
-            if (tenantId && tenantId !== "all") {
-                fallbackConstraints.push(where("tenantId", "==", tenantId));
-            }
-            fallbackConstraints.push(limit(safePageSize + 1));
-
+            const fallbackConstraints = [limit(safePageSize + 1)];
             const fallbackQuery = query(usersRef, ...fallbackConstraints);
             querySnapshot = await getDocs(fallbackQuery);
         }
@@ -107,15 +192,8 @@ export const getAllUsers = async ({
 };
 
 /**
- * Searches users across fields with support for:
- * - Multiple users simultaneously (comma / Arabic comma separated)
- * - Compound names with spaces (e.g. "محمد أحمد")
- * - Arabic text normalization (alef, hamza, ta marbuta, etc.)
- * - Partial phone numbers & Arabic/Persian digits
- * - Partial & exact email matches
- * - User ID matching
- * - Combined role and status filtering
- * - Resilient fallback against Firestore missing composite index errors
+ * Searches users across fields with support for Arabic normalization,
+ * multiple search tokens, phone, email, name, role, and status.
  */
 export const searchUsers = async ({
     searchQuery = "",
@@ -131,28 +209,29 @@ export const searchUsers = async ({
             return [];
         }
 
-        const usersRef = collection(db, USERS_COLLECTION);
-        let snapshot;
+        let allUsers = [];
 
-        try {
-            const constraints = [];
-            if (role && role !== "all") {
-                constraints.push(where("role", "==", role));
+        if (tenantId && tenantId !== "all") {
+            allUsers = await getTenantUsersList(tenantId);
+        } else {
+            const usersRef = collection(db, USERS_COLLECTION);
+            let snapshot;
+            try {
+                const constraints = [];
+                if (role && role !== "all") {
+                    constraints.push(where("role", "==", role));
+                }
+                if (status && status !== "all") {
+                    constraints.push(where("status", "==", status));
+                }
+                const q = constraints.length > 0 ? query(usersRef, ...constraints) : query(usersRef);
+                snapshot = await getDocs(q);
+            } catch (indexError) {
+                console.warn("Firestore indexed query error, falling back to all users scan:", indexError);
+                snapshot = await getDocs(usersRef);
             }
-            if (status && status !== "all") {
-                constraints.push(where("status", "==", status));
-            }
-            if (tenantId && tenantId !== "all") {
-                constraints.push(where("tenantId", "==", tenantId));
-            }
-            const q = constraints.length > 0 ? query(usersRef, ...constraints) : query(usersRef);
-            snapshot = await getDocs(q);
-        } catch (indexError) {
-            console.warn("Firestore indexed query error, falling back to all users scan:", indexError);
-            snapshot = await getDocs(usersRef);
+            allUsers = snapshot.docs.map(mapUser);
         }
-
-        const allUsers = snapshot.docs.map(mapUser);
 
         const parsedTargets = targets.map((t) => {
             const normText = normalizeArabic(t);
@@ -171,13 +250,6 @@ export const searchUsers = async ({
         const scoredUsers = [];
 
         for (const user of allUsers) {
-            if (tenantId && tenantId !== "all") {
-                const userTenant = user.tenantId || "abu-hady";
-                if (userTenant !== tenantId) {
-                    continue;
-                }
-            }
-
             const userRole = String(user.role || "").toLowerCase();
             const userStatus = String(user.status || "").toLowerCase();
 
@@ -263,18 +335,47 @@ export const searchUsers = async ({
 };
 
 /**
- * Fetches user count statistics grouped by role.
+ * Fetches user statistics grouped by role.
  */
 export const getUserStats = async ({ tenantId = null } = {}) => {
     try {
-        const usersRef = collection(db, USERS_COLLECTION);
-        const tenantConstraint = (tenantId && tenantId !== "all") ? [where("tenantId", "==", tenantId)] : [];
+        if (tenantId && tenantId !== "all") {
+            const [customersSnap, membersSnap] = await Promise.all([
+                getCountFromServer(collection(db, "tenants", tenantId, "customers")),
+                getDocs(collection(db, "tenants", tenantId, "members")),
+            ]);
 
-        const totalQuery = query(usersRef, ...tenantConstraint);
-        const customersQuery = query(usersRef, where("role", "==", "customer"), ...tenantConstraint);
-        const driversQuery = query(usersRef, where("role", "==", "driver"), ...tenantConstraint);
-        const adminsQuery = query(usersRef, where("role", "==", "admin"), ...tenantConstraint);
-        const superAdminsQuery = query(usersRef, where("role", "==", "super_admin"), ...tenantConstraint);
+            const customersCount = customersSnap.data().count;
+
+            let drivers = 0;
+            let management = 0;
+
+            membersSnap.docs.forEach((d) => {
+                const role = String(d.data().role || "").toLowerCase();
+                if (role === "driver") {
+                    drivers += 1;
+                } else {
+                    management += 1;
+                }
+            });
+
+            return {
+                total: customersCount + membersSnap.docs.length,
+                customers: customersCount,
+                drivers,
+                admins: management,
+                superAdmins: 0,
+                management,
+            };
+        }
+
+        // Platform-wide stats
+        const usersRef = collection(db, USERS_COLLECTION);
+        const totalQuery = query(usersRef);
+        const customersQuery = query(usersRef, where("role", "==", "customer"));
+        const driversQuery = query(usersRef, where("role", "==", "driver"));
+        const adminsQuery = query(usersRef, where("role", "==", "admin"));
+        const superAdminsQuery = query(usersRef, where("role", "==", "super_admin"));
 
         const [
             totalSnapshot,
@@ -331,67 +432,131 @@ export const getUsersCountByRole = async (role = "all") => {
 };
 
 /**
- * Updates a user's role.
+ * Updates a user's role and/or status across Firestore:
+ * - When in a merchant context:
+ *   - If role is "customer": saved to /tenants/{tenantId}/customers, removed from /members
+ *   - If role is promoted (e.g. driver, staff, admin): saved to /tenants/{tenantId}/members, removed from /customers
+ *   - Also updates root /users/{userId} document
  */
-export const updateUserRole = async (userId, newRole) => {
+export const updateUserAccount = async (userId, { role, status, tenantId = null } = {}) => {
     try {
+        if (!userId) throw new Error("userId is required.");
+
+        // Fetch existing data from root /users or subcollections for consistency
         const userRef = doc(db, USERS_COLLECTION, userId);
+        const userSnap = await getDoc(userRef);
+        const existingData = userSnap.exists() ? userSnap.data() : {};
 
-        await updateDoc(userRef, {
-            role: newRole,
-            updatedAt: serverTimestamp(),
-        });
+        const effectiveTenant = tenantId || existingData.tenantId || null;
 
-        return true;
-    } catch (error) {
-        console.error("Error updating user role:", error);
-        throw error;
-    }
-};
+        // If merchant tenant is known, manage subcollections
+        if (effectiveTenant && effectiveTenant !== "all") {
+            const customerRef = doc(db, "tenants", effectiveTenant, "customers", userId);
+            const memberRef = doc(db, "tenants", effectiveTenant, "members", userId);
 
-/**
- * Updates a user's status.
- */
-export const updateUserStatus = async (userId, newStatus) => {
-    try {
-        const userRef = doc(db, USERS_COLLECTION, userId);
+            if (role !== undefined) {
+                if (role === "customer") {
+                    // Demote / keep as customer
+                    await setDoc(customerRef, {
+                        uid: userId,
+                        name: existingData.name || existingData.displayName || "عميل",
+                        email: existingData.email || "",
+                        phone: existingData.phone || existingData.phoneNumber || "",
+                        role: "customer",
+                        status: status !== undefined ? status : (existingData.status || "active"),
+                        updatedAt: serverTimestamp(),
+                    }, { merge: true });
 
-        await updateDoc(userRef, {
-            status: newStatus,
-            updatedAt: serverTimestamp(),
-        });
+                    // Remove from members
+                    try {
+                        await deleteDoc(memberRef);
+                    } catch (e) {
+                        // ignore if doc didn't exist
+                    }
+                } else {
+                    // Promote to member (driver, staff, admin, tenant_owner)
+                    await setDoc(memberRef, {
+                        uid: userId,
+                        name: existingData.name || existingData.displayName || "عضو",
+                        email: existingData.email || "",
+                        phone: existingData.phone || existingData.phoneNumber || "",
+                        role: role,
+                        status: status !== undefined ? status : (existingData.status || "active"),
+                        updatedAt: serverTimestamp(),
+                    }, { merge: true });
 
-        return true;
-    } catch (error) {
-        console.error("Error updating user status:", error);
-        throw error;
-    }
-};
+                    // Remove from customers
+                    try {
+                        await deleteDoc(customerRef);
+                    } catch (e) {
+                        // ignore
+                    }
+                }
+            } else if (status !== undefined) {
+                // Update status in whichever subcollection the user exists
+                try {
+                    const cSnap = await getDoc(customerRef);
+                    if (cSnap.exists()) {
+                        await updateDoc(customerRef, { status, updatedAt: serverTimestamp() });
+                    }
+                } catch {}
 
-/**
- * Updates a user's role and/or status together.
- */
-export const updateUserAccount = async (userId, { role, status } = {}) => {
-    try {
-        const userRef = doc(db, USERS_COLLECTION, userId);
+                try {
+                    const mSnap = await getDoc(memberRef);
+                    if (mSnap.exists()) {
+                        await updateDoc(memberRef, { status, updatedAt: serverTimestamp() });
+                    }
+                } catch {}
+            }
+        }
 
-        const updates = {
+        // Always update root /users document
+        const rootUpdates = {
             updatedAt: serverTimestamp(),
         };
 
         if (role !== undefined) {
-            updates.role = role;
+            rootUpdates.role = role;
         }
 
         if (status !== undefined) {
-            updates.status = status;
+            rootUpdates.status = status;
         }
 
-        await updateDoc(userRef, updates);
+        if (effectiveTenant && effectiveTenant !== "all") {
+            rootUpdates.tenantId = effectiveTenant;
+        }
+
+        if (userSnap.exists()) {
+            await updateDoc(userRef, rootUpdates);
+        } else {
+            await setDoc(userRef, {
+                uid: userId,
+                name: "مستخدم",
+                role: role || "customer",
+                status: status || "active",
+                ...rootUpdates,
+                createdAt: serverTimestamp(),
+            });
+        }
 
         return true;
     } catch (error) {
         console.error("Error updating user account:", error);
         throw error;
     }
+};
+
+/**
+ * Updates a user's role.
+ */
+export const updateUserRole = async (userId, newRole, tenantId = null) => {
+    return updateUserAccount(userId, { role: newRole, tenantId });
+};
+
+/**
+ * Updates a user's status.
+ */
+export const updateUserStatus = async (userId, newStatus, tenantId = null) => {
+    return updateUserAccount(userId, { status: newStatus, tenantId });
 };

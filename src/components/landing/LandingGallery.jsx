@@ -2,11 +2,13 @@ import {
     FaCar,
     FaExternalLinkAlt,
 } from "react-icons/fa";
+import { useTenant } from "@/context/TenantContext";
 
 export default function LandingGallery({
     gallery,
     isArabic,
 }) {
+    const { tenantName } = useTenant();
     return (
         <section
             id="gallery"
@@ -59,9 +61,9 @@ export default function LandingGallery({
 
             <div className="relative z-10 mb-14 sm:mb-16 text-center px-4">
                 <span className="text-whatsapp text-xs sm:text-sm font-semibold uppercase tracking-[.3em]">
-                    {isArabic
-                        ? "عالم أبو هادي"
-                        : "Abu Hady World"}
+                    {tenantName
+                        ? (isArabic ? `عالم ${tenantName}` : `${tenantName} World`)
+                        : (isArabic ? "عالم سِكّة" : "SEKKA World")}
                 </span>
 
                 <h2 className="text-3xl sm:text-4xl lg:text-6xl font-bold mt-4">
@@ -96,7 +98,7 @@ export default function LandingGallery({
                                         }
                                         alt={
                                             item.title ||
-                                            "Abu Hady Luxury"
+                                            (tenantName ? `${tenantName} Luxury` : "SEKKA Luxury")
                                         }
                                         className="abu-image w-full h-full object-cover"
                                     />
@@ -166,7 +168,7 @@ export default function LandingGallery({
                                     src={imageUrl}
                                     alt={
                                         item.title ||
-                                        "Abu Hady Luxury"
+                                        (tenantName ? `${tenantName} Luxury` : "SEKKA Luxury")
                                     }
                                     className="abu-image w-full h-full object-cover"
                                 />
