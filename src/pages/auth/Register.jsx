@@ -11,6 +11,7 @@ import { toast } from "react-toastify";
 import { registerWithEmail, signInWithGoogle } from "@/services/authService";
 import { registerSchema } from "../../validations/authSchemas";
 import { useTenant } from "@/context/TenantContext";
+import { useState } from "react";
 
 export default function Register() {
     const navigate = useNavigate();
@@ -81,10 +82,29 @@ export default function Register() {
                         );
                         break;
 
-                    default:
-                        toast.error(
-                            "حدث خطأ أثناء إنشاء الحساب. حاول مرة أخرى."
+                    case "permission-denied":
+                    case "firestore/permission-denied":
+                        toast.warn(
+                            "تم إنشاء حساب الدخول بنجاح! يلزم تحديث قواعد Firestore (Rules) في لوحة Firebase لحفظ بيانات الملف الشخصي."
                         );
+                        navigate(`/${locale}/login`);
+                        break;
+
+                    default:
+                        if (
+                            error?.message?.includes("insufficient permissions") ||
+                            error?.message?.includes("Missing or insufficient permissions")
+                        ) {
+                            toast.warn(
+                                "تم إنشاء حساب الدخول بنجاح! يلزم تحديث قواعد Firestore (Rules) في لوحة Firebase لحفظ بيانات الملف الشخصي."
+                            );
+                            navigate(`/${locale}/login`);
+                        } else {
+                            toast.error(
+                                "حدث خطأ أثناء إنشاء الحساب. حاول مرة أخرى."
+                            );
+                        }
+                        break;
                 }
             } finally {
                 setSubmitting(false);
@@ -413,7 +433,7 @@ export default function Register() {
                 </span>
 
                 <Link
-                    to={`/${locale}/login`}
+                    to={`/${locale}/login${typeof window !== "undefined" && window.location.search ? window.location.search : (tenantId ? `?tenant=${tenantId}` : "")}`}
                     className="text-whatsapp font-semibold hover:underline transition-all"
                 >
                     تسجيل الدخول

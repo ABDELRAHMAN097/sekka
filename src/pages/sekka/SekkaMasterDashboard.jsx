@@ -1,6 +1,17 @@
 
 import { useState, useEffect, useMemo, useCallback } from "react";
-import { useNavigate, useParams } from "react-router-dom";
+import { useNavigate, useParams, Link } from "react-router-dom";
+import {
+    collection,
+    query,
+    where,
+    getDocs,
+    updateDoc,
+    setDoc,
+    doc,
+    serverTimestamp,
+} from "firebase/firestore";
+import { db } from "@/config/firebase";
 import {
     getAllTenants,
     createTenant,
@@ -501,6 +512,7 @@ export default function SekkaMasterDashboard() {
                 id: safeSlug,
                 slug: safeSlug,
                 name,
+                role: "tenant_owner",
                 status: "active",
                 ownerEmail: newMerchant.ownerEmail.trim(),
                 ownerPhone: newMerchant.ownerPhone.trim(),
@@ -517,6 +529,40 @@ export default function SekkaMasterDashboard() {
             };
 
             await createTenant(safeSlug, payload);
+
+            // Auto-link owner if user account exists with this email
+            if (newMerchant.ownerEmail.trim()) {
+                try {
+                    const emailNorm = newMerchant.ownerEmail.trim().toLowerCase();
+                    const usersRef = collection(db, "users");
+                    const userSnap = await getDocs(query(usersRef, where("email", "==", emailNorm)));
+                    if (!userSnap.empty) {
+                        const ownerDoc = userSnap.docs[0];
+                        const ownerUid = ownerDoc.id;
+
+                        // 1. Update user profile to be tenant_owner
+                        await updateDoc(doc(db, "users", ownerUid), {
+                            role: "tenant_owner",
+                            tenantId: safeSlug,
+                            updatedAt: serverTimestamp(),
+                        });
+
+                        // 2. Add owner to tenant members subcollection
+                        await setDoc(doc(db, "tenants", safeSlug, "members", ownerUid), {
+                            uid: ownerUid,
+                            name: name,
+                            email: newMerchant.ownerEmail.trim(),
+                            phone: newMerchant.ownerPhone.trim(),
+                            role: "tenant_owner",
+                            status: "active",
+                            createdAt: serverTimestamp(),
+                            updatedAt: serverTimestamp(),
+                        }, { merge: true });
+                    }
+                } catch (linkErr) {
+                    console.warn("Could not auto-link owner account:", linkErr);
+                }
+            }
 
             const repairResult = await autoRepairTenant(safeSlug);
 
@@ -895,6 +941,17 @@ export default function SekkaMasterDashboard() {
 
                                                 <td className="px-4 py-4 text-center">
                                                     <div className="inline-flex items-center gap-1.5">
+                                                        <a
+                                                            href={`/${locale}/t/${tenant.slug || tenant.id}`}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            title="زيارة موقع التاجر المخصص للعملاء"
+                                                            className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-cyan-600/20 hover:bg-cyan-600/30 text-cyan-300 border border-cyan-500/30 font-bold text-xs transition"
+                                                        >
+                                                            <span>موقع التاجر</span>
+                                                            <FiExternalLink className="w-3 h-3" />
+                                                        </a>
+
                                                         <button
                                                             type="button"
                                                             onClick={() => handleImpersonate(tenant)}

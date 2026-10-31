@@ -53,15 +53,14 @@ export const updateUserProfileData = async (userId, data = {}) => {
         updates.role = "customer";
         updates.status = "active";
         updates.createdAt = serverTimestamp();
-    }
 
-    if (SEARCH_FIELDS.some((key) => data[key] !== undefined)) {
+        // Search fields only on document creation to adhere to user update security rules
         Object.assign(
             updates,
             getSearchFields({
-                name: cleanData.name ?? existingData.name ?? currentUser.displayName ?? "",
-                email: existingData.email ?? currentUser.email ?? "",
-                phone: cleanData.phone ?? existingData.phone ?? currentUser.phoneNumber ?? "",
+                name: updates.name,
+                email: updates.email,
+                phone: updates.phone,
             })
         );
     }

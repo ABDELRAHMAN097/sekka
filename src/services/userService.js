@@ -449,64 +449,68 @@ export const updateUserAccount = async (userId, { role, status, tenantId = null 
 
         const effectiveTenant = tenantId || existingData.tenantId || null;
 
-        // If merchant tenant is known, manage subcollections
+        // If merchant tenant is known, manage subcollections safely without blocking root update
         if (effectiveTenant && effectiveTenant !== "all") {
-            const customerRef = doc(db, "tenants", effectiveTenant, "customers", userId);
-            const memberRef = doc(db, "tenants", effectiveTenant, "members", userId);
+            try {
+                const customerRef = doc(db, "tenants", effectiveTenant, "customers", userId);
+                const memberRef = doc(db, "tenants", effectiveTenant, "members", userId);
 
-            if (role !== undefined) {
-                if (role === "customer") {
-                    // Demote / keep as customer
-                    await setDoc(customerRef, {
-                        uid: userId,
-                        name: existingData.name || existingData.displayName || "عميل",
-                        email: existingData.email || "",
-                        phone: existingData.phone || existingData.phoneNumber || "",
-                        role: "customer",
-                        status: status !== undefined ? status : (existingData.status || "active"),
-                        updatedAt: serverTimestamp(),
-                    }, { merge: true });
+                if (role !== undefined) {
+                    if (role === "customer") {
+                        // Demote / keep as customer
+                        await setDoc(customerRef, {
+                            uid: userId,
+                            name: existingData.name || existingData.displayName || "عميل",
+                            email: existingData.email || "",
+                            phone: existingData.phone || existingData.phoneNumber || "",
+                            role: "", // Role is empty string in customers subcollection as per DB requirements
+                            status: status !== undefined ? status : (existingData.status || "active"),
+                            updatedAt: serverTimestamp(),
+                        }, { merge: true });
 
-                    // Remove from members
-                    try {
-                        await deleteDoc(memberRef);
-                    } catch (e) {
-                        // ignore if doc didn't exist
+                        // Remove from members
+                        try {
+                            await deleteDoc(memberRef);
+                        } catch {
+                            // ignore if doc didn't exist
+                        }
+                    } else {
+                        // Promote to member (driver, staff, admin, tenant_owner)
+                        await setDoc(memberRef, {
+                            uid: userId,
+                            name: existingData.name || existingData.displayName || "عضو",
+                            email: existingData.email || "",
+                            phone: existingData.phone || existingData.phoneNumber || "",
+                            role: role,
+                            status: status !== undefined ? status : (existingData.status || "active"),
+                            updatedAt: serverTimestamp(),
+                        }, { merge: true });
+
+                        // Remove from customers
+                        try {
+                            await deleteDoc(customerRef);
+                        } catch {
+                            // ignore
+                        }
                     }
-                } else {
-                    // Promote to member (driver, staff, admin, tenant_owner)
-                    await setDoc(memberRef, {
-                        uid: userId,
-                        name: existingData.name || existingData.displayName || "عضو",
-                        email: existingData.email || "",
-                        phone: existingData.phone || existingData.phoneNumber || "",
-                        role: role,
-                        status: status !== undefined ? status : (existingData.status || "active"),
-                        updatedAt: serverTimestamp(),
-                    }, { merge: true });
-
-                    // Remove from customers
+                } else if (status !== undefined) {
+                    // Update status in whichever subcollection the user exists
                     try {
-                        await deleteDoc(customerRef);
-                    } catch (e) {
-                        // ignore
-                    }
+                        const cSnap = await getDoc(customerRef);
+                        if (cSnap.exists()) {
+                            await updateDoc(customerRef, { status, updatedAt: serverTimestamp() });
+                        }
+                    } catch {}
+
+                    try {
+                        const mSnap = await getDoc(memberRef);
+                        if (mSnap.exists()) {
+                            await updateDoc(memberRef, { status, updatedAt: serverTimestamp() });
+                        }
+                    } catch {}
                 }
-            } else if (status !== undefined) {
-                // Update status in whichever subcollection the user exists
-                try {
-                    const cSnap = await getDoc(customerRef);
-                    if (cSnap.exists()) {
-                        await updateDoc(customerRef, { status, updatedAt: serverTimestamp() });
-                    }
-                } catch {}
-
-                try {
-                    const mSnap = await getDoc(memberRef);
-                    if (mSnap.exists()) {
-                        await updateDoc(memberRef, { status, updatedAt: serverTimestamp() });
-                    }
-                } catch {}
+            } catch (tenantSyncErr) {
+                console.warn("Tenant subcollection sync skipped:", tenantSyncErr?.message);
             }
         }
 

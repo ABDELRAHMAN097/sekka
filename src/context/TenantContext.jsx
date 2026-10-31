@@ -98,7 +98,8 @@ const getStoredImpersonatedTenant = () => {
 };
 
 export const TenantProvider = ({ children }) => {
-    const { user, profile, isPlatformAdmin } = useAuth();
+    const { user, profile, isPlatformAdmin, isSuperAdmin } = useAuth();
+    const isPlatformPrivileged = isPlatformAdmin || isSuperAdmin;
 
     const [impersonatedId, setImpersonatedId] = useState(
         getStoredImpersonatedTenant
@@ -110,9 +111,17 @@ export const TenantProvider = ({ children }) => {
 
     const detectedId = detectTenantIdentifier();
 
-    const activeIdentifier = isPlatformAdmin
-        ? impersonatedId || detectedId
-        : detectedId || profile?.tenantId || null;
+    // In dashboard routes: regular merchants and staff are locked to their own tenant.
+    // Platform admins operate in platform scope (tenantData = null) unless actively impersonating.
+    const isDashboardPath =
+        typeof window !== "undefined" &&
+        window.location.pathname.includes("/dashboard");
+
+    const activeIdentifier = isPlatformPrivileged
+        ? impersonatedId || null
+        : isDashboardPath && profile?.tenantId
+          ? profile.tenantId
+          : detectedId || profile?.tenantId || null;
 
     const refreshTenant = useCallback(async (identifier = activeIdentifier) => {
         const requestId = ++requestIdRef.current;
@@ -224,9 +233,9 @@ export const TenantProvider = ({ children }) => {
         tenant: tenantData,
         loadingTenant: loading,
         isImpersonating: Boolean(
-            isPlatformAdmin && impersonatedId
+            isPlatformPrivileged && impersonatedId
         ),
-        impersonatedTenantId: isPlatformAdmin
+        impersonatedTenantId: isPlatformPrivileged
             ? impersonatedId
             : null,
         switchTenant,

@@ -10,11 +10,13 @@ import {
 } from "react-icons/fi";
 
 const ROLES = [
-    ["customer", "عميل"],
-    ["driver", "سائق"],
-    ["staff", "ستاف / موظف"],
-    ["admin", "مدير"],
-    ["super_admin", "سوبر ادمن"],
+    ["customer", "عميل (Customer)"],
+    ["driver", "سائق (Driver)"],
+    ["worker", "عامل / موظف (Worker)"],
+    ["admin", "مسؤول (Admin)"],
+    ["super_admin", "مسؤول عام (Super Admin)"],
+    ["tenant_owner", "مالك نشاط (Tenant Owner)"],
+    ["tenant_admin", "مسؤول نشاط (Tenant Admin)"],
 ];
 
 const STATUSES = [
@@ -36,7 +38,8 @@ const ChangeRoleModal = ({
 
     useEffect(() => {
         if (user) {
-            setRole(user.role || "customer");
+            const r = String(user.role || "customer").toLowerCase().trim();
+            setRole(r);
             setStatus(user.status || "active");
         }
     }, [user]);

@@ -6,12 +6,17 @@ import { useEffect, useRef } from "react";
 
 const ROLE_LABELS = {
     platform_admin: "مسؤول المنصة",
-    tenant_owner: "مالك النشاط",
+    platform_staf: "فريق المنصة",
+    platform_staff: "فريق المنصة",
+    tenant_owner: "مالك النشاط / التاجر",
+    tenant_staf: "موظف النشاط",
+    tenant_staff: "موظف النشاط",
+    tenant_driver: "سائق النشاط",
     tenant_admin: "مسؤول النشاط",
     driver: "سائق",
     customer: "عميل",
-    admin: "أدمن قديم",
-    super_admin: "مسؤول قديم",
+    admin: "مدير",
+    super_admin: "مسؤول عام",
 };
 
 export default function RoleGuard({
@@ -23,6 +28,8 @@ export default function RoleGuard({
         role,
         isCustomer,
         isPlatformAdmin,
+        canAccessDashboard,
+        hasRole,
         loading,
     } = useAuth();
 
@@ -30,20 +37,19 @@ export default function RoleGuard({
     const location = useLocation();
     const hasWarnedRef = useRef(false);
 
+    // If allowedRoles is specified, check against those specific roles.
+    // If allowedRoles is empty (general dashboard wrapper), require general dashboard access (canAccessDashboard).
     const isAllowed =
         Boolean(user) &&
-        (
-            isPlatformAdmin ||
-            allowedRoles.length === 0 ||
-            allowedRoles.includes(role)
-        );
+        (allowedRoles.length === 0
+            ? canAccessDashboard
+            : hasRole(allowedRoles));
 
     useEffect(() => {
         if (
             !loading &&
             user &&
-            isCustomer &&
-            !isAllowed &&
+            (isCustomer || !canAccessDashboard || !isAllowed) &&
             !hasWarnedRef.current
         ) {
             toast.warn(
@@ -52,10 +58,10 @@ export default function RoleGuard({
             hasWarnedRef.current = true;
         }
 
-        if (!user || !isCustomer) {
+        if (!user || canAccessDashboard) {
             hasWarnedRef.current = false;
         }
-    }, [loading, user, isCustomer, isAllowed]);
+    }, [loading, user, isCustomer, canAccessDashboard, isAllowed]);
 
     if (loading) {
         return (
@@ -78,7 +84,8 @@ export default function RoleGuard({
         );
     }
 
-    if (isCustomer && !isAllowed) {
+    // Customers and any accounts without dashboard permissions must be redirected
+    if (isCustomer || !canAccessDashboard) {
         return (
             <Navigate
                 to={redirectPath || `/${locale}`}

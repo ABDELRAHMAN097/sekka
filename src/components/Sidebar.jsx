@@ -13,7 +13,7 @@ export default function Sidebar({ isOpen, setIsOpen }) {
   const navigate = useNavigate();
   const { locale } = useParams();
   const { t } = useI18n();
-  const { user, profile, role, isSuperAdmin } = useAuth();
+  const { user, profile, role, isSuperAdmin, isPlatformAdmin, isPlatformStaff, hasRole } = useAuth();
   const { isModuleEnabled, tenantName, isImpersonating } = useTenant();
   const isArabic = locale === "ar";
 
@@ -41,11 +41,14 @@ export default function Sidebar({ isOpen, setIsOpen }) {
     .toUpperCase();
 
   const filteredMenuItems = menuItems.filter((item) => {
-    if (item.allowedRoles && item.allowedRoles.length > 0 && !item.allowedRoles.includes(role)) {
+    if (item.isMasterAdmin && !isPlatformAdmin && !isPlatformStaff && !isSuperAdmin) {
+      return false;
+    }
+    if (item.allowedRoles && item.allowedRoles.length > 0 && !hasRole(item.allowedRoles)) {
       return false;
     }
     // Module flag restriction for merchant users
-    if (item.moduleKey && !isSuperAdmin && !isModuleEnabled(item.moduleKey)) {
+    if (item.moduleKey && !isSuperAdmin && !isPlatformAdmin && !isModuleEnabled(item.moduleKey)) {
       return false;
     }
     return true;

@@ -34,6 +34,7 @@ export const createDefaultTenantData = (id, name, slug) => {
         id: id || slug,
         slug: slug || id,
         name: name || "متجر جديد",
+        role: "tenant_owner",
         status: "active",
         domain: "",
         ownerEmail: "",
@@ -188,7 +189,7 @@ export const addTenantCustomer = async (tenantId, customerData) => {
         const customerRef = doc(db, TENANTS_COLLECTION, tenantId, "customers", customerData.uid);
         await setDoc(customerRef, {
             ...customerData,
-            role: customerData.role || "customer",
+            role: customerData.role !== undefined ? customerData.role : "",
             status: customerData.status || "active",
             createdAt: customerData.createdAt || serverTimestamp(),
             updatedAt: serverTimestamp(),
@@ -206,7 +207,7 @@ export const addTenantMember = async (tenantId, memberData) => {
         const memberRef = doc(db, TENANTS_COLLECTION, tenantId, "members", memberData.uid);
         await setDoc(memberRef, {
             ...memberData,
-            role: memberData.role || "staff",
+            role: memberData.role || "tenant_staf",
             status: memberData.status || "active",
             createdAt: memberData.createdAt || serverTimestamp(),
             updatedAt: serverTimestamp(),

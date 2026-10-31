@@ -124,28 +124,17 @@ export const getPublicTenantId = async (tenantId = null) => {
 /**
  * Saves user profile in root /users/{uid} document.
  */
-const saveUserProfile = async (user, { name = "", phone = "", tenantId = null }) => {
+const saveUserProfile = async (user, { name = "", phone = "", tenantId = null, isNewUser = false }) => {
     const userRef = doc(db, USERS_COLLECTION, user.uid);
-    const existing = await getDoc(userRef);
-
     const displayName = name || user.displayName || "مستخدم";
     const userPhone = phone || user.phoneNumber || "";
     const userEmail = user.email || "";
 
-    if (existing.exists()) {
-        const existingData = existing.data();
-        await saveUserSearchFields(user.uid, existingData);
-
-        // If user document is missing tenantId and we have one from the merchant, record it
-        if (!existingData.tenantId && tenantId) {
-            try {
-                await updateDoc(userRef, { tenantId, updatedAt: serverTimestamp() });
-            } catch (e) {
-                console.warn("Could not attach tenantId to existing user:", e);
-            }
-        }
-        return existingData;
-    }
+    const searchFields = getSearchFields({
+        name: displayName,
+        email: userEmail,
+        phone: userPhone,
+    });
 
     const profile = {
         uid: user.uid,
@@ -155,16 +144,37 @@ const saveUserProfile = async (user, { name = "", phone = "", tenantId = null })
         role: "customer",
         status: "active",
         tenantId: tenantId || "",
-        ...getSearchFields({
-            name: displayName,
-            email: userEmail,
-            phone: userPhone,
-        }),
+        ...searchFields,
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
     };
 
-    await setDoc(userRef, profile);
+    // For brand new registration: write directly to avoid read rule failures on non-existent documents
+    if (isNewUser) {
+        await setDoc(userRef, profile);
+        return profile;
+    }
+
+    try {
+        const existing = await getDoc(userRef);
+        if (existing.exists()) {
+            const existingData = existing.data();
+            await saveUserSearchFields(user.uid, existingData);
+
+            if (!existingData.tenantId && tenantId) {
+                try {
+                    await updateDoc(userRef, { tenantId, updatedAt: serverTimestamp() });
+                } catch (e) {
+                    console.warn("Could not attach tenantId to existing user:", e);
+                }
+            }
+            return existingData;
+        }
+    } catch (readErr) {
+        console.warn("User profile read skipped (proceeding to write):", readErr?.message);
+    }
+
+    await setDoc(userRef, profile, { merge: true });
     return profile;
 };
 
@@ -183,38 +193,38 @@ export const linkTenantCustomer = async (user, tenantIdOrSlug) => {
 
         const tenantId = tenant.id;
         const customerRef = doc(db, "tenants", tenantId, "customers", user.uid);
-        const customerSnapshot = await getDoc(customerRef);
 
         const customerData = {
             uid: user.uid,
-            name: user.displayName || user.name || "مستخدم",
+            name: user.displayName || user.name || "عميل",
             email: user.email || "",
             phone: user.phoneNumber || user.phone || "",
-            role: "customer",
+            role: "", // Empty role string for customer as per DB requirements
             status: "active",
             updatedAt: serverTimestamp(),
         };
 
-        if (!customerSnapshot.exists()) {
-            customerData.createdAt = serverTimestamp();
-            await setDoc(customerRef, customerData);
-        } else {
-            // Keep status/role if already set, but update basic contact info
-            await setDoc(customerRef, customerData, { merge: true });
-        }
+        // Using setDoc with merge: true safely creates or updates without requiring getDoc
+        await setDoc(customerRef, {
+            ...customerData,
+            createdAt: serverTimestamp(),
+        }, { merge: true });
 
-        // Also ensure root user profile records the tenantId
+        // Update root user profile with tenantId safely (preserve original registration merchant)
         try {
             const userRef = doc(db, USERS_COLLECTION, user.uid);
-            await updateDoc(userRef, {
-                tenantId,
-                updatedAt: serverTimestamp(),
-            });
+            const userSnap = await getDoc(userRef);
+            if (userSnap.exists() && !userSnap.data()?.tenantId) {
+                await updateDoc(userRef, {
+                    tenantId,
+                    updatedAt: serverTimestamp(),
+                });
+            }
         } catch {
-            // ignore if user doc updated concurrently
+            // ignore
         }
     } catch (error) {
-        console.error(`Error linking customer [${user?.uid}] to tenant:`, error);
+        console.warn(`Customer linking to tenant notice (${tenantIdOrSlug}):`, error?.message);
     }
 };
 
@@ -228,13 +238,32 @@ export const registerWithEmail = async ({
     const result = await createUserWithEmailAndPassword(auth, email, password);
     const user = result.user;
 
-    await updateProfile(user, { displayName: name || "" });
+    try {
+        await updateProfile(user, { displayName: name || "" });
+    } catch (updateErr) {
+        console.warn("Could not update displayName:", updateErr);
+    }
 
-    const effectiveTenantId = await getPublicTenantId(tenantId);
-    const profile = await saveUserProfile(user, { name, phone, tenantId: effectiveTenantId });
+    let effectiveTenantId = null;
+    try {
+        effectiveTenantId = await getPublicTenantId(tenantId);
+    } catch (tenantErr) {
+        console.warn("Could not resolve tenant during register:", tenantErr);
+    }
+
+    const profile = await saveUserProfile(user, {
+        name,
+        phone,
+        tenantId: effectiveTenantId,
+        isNewUser: true,
+    });
 
     if (effectiveTenantId) {
-        await linkTenantCustomer(user, effectiveTenantId);
+        try {
+            await linkTenantCustomer(user, effectiveTenantId);
+        } catch (linkErr) {
+            console.warn("Could not link tenant customer:", linkErr);
+        }
     }
 
     try {

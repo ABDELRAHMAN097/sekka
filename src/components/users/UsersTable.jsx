@@ -3,11 +3,16 @@ import { FiShield, FiUser, FiMail, FiPhone, FiEdit2 } from "react-icons/fi";
 import ChangeRoleModal from "./ChangeRoleModal";
 
 const ROLE_LABELS = {
+    platform_admin: "مسؤول المنصة",
+    platform_staf: "فريق المنصة",
+    platform_staff: "فريق المنصة",
+    tenant_owner: "مالك النشاط",
+    tenant_staf: "موظف النشاط",
+    tenant_staff: "موظف النشاط",
+    tenant_driver: "سائق النشاط",
+    tenant_admin: "مسؤول المتجر",
     admin: "مدير",
     super_admin: "سوبر ادمن",
-    superadmin: "سوبر ادمن",
-    tenant_owner: "مالك النشاط",
-    tenant_admin: "مسؤول المتجر",
     driver: "سائق",
     customer: "عميل",
     client: "عميل",

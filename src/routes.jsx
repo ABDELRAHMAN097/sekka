@@ -116,6 +116,7 @@ export const routes = [
                                         allowedRoles={[
                                             "admin",
                                             "super_admin",
+                                            "platform_admin",
                                             "tenant_owner",
                                             "tenant_admin",
                                         ]}
@@ -140,6 +141,7 @@ export const routes = [
                                             allowedRoles={[
                                                 "admin",
                                                 "super_admin",
+                                                "platform_admin",
                                                 "tenant_owner",
                                                 "tenant_admin",
                                             ]}
@@ -155,6 +157,7 @@ export const routes = [
                                             allowedRoles={[
                                                 "admin",
                                                 "super_admin",
+                                                "platform_admin",
                                                 "tenant_owner",
                                                 "tenant_admin",
                                             ]}

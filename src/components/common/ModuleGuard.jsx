@@ -5,15 +5,40 @@ import { useAuth } from "@/context/AuthContext";
 import { FiLock } from "react-icons/fi";
 
 export default function ModuleGuard({ moduleKey, children }) {
-    const { isModuleEnabled, tenantName, isImpersonating } = useTenant();
-    const { isPlatformAdmin } = useAuth();
+    const { isModuleEnabled, tenantName, tenantId, loadingTenant } = useTenant();
+    const { isPlatformAdmin, isSuperAdmin, loading: authLoading } = useAuth();
 
-    const canBypassModuleGuard = isPlatformAdmin && !isImpersonating;
+    // 1. Wait for auth state to finish loading before evaluating permissions
+    if (authLoading) {
+        return (
+            <div className="min-h-[60vh] flex flex-col items-center justify-center p-6 text-center">
+                <div className="w-10 h-10 border-4 border-primary-color border-t-transparent rounded-full animate-spin mb-3" />
+                <p className="text-gray-400 text-sm">جاري التحقق من الصلاحيات...</p>
+            </div>
+        );
+    }
 
-    if (canBypassModuleGuard) {
+    // 2. Platform Admins and Super Admins ALWAYS have full access to all platform modules
+    if (isPlatformAdmin || isSuperAdmin) {
         return children || <Outlet />;
     }
 
+    // 3. In platform-level mode (no tenant specified), modules are not locked by merchant plan limits
+    if (!tenantId) {
+        return children || <Outlet />;
+    }
+
+    // 4. Wait for tenant data to load before deciding to lock
+    if (loadingTenant) {
+        return (
+            <div className="min-h-[60vh] flex flex-col items-center justify-center p-6 text-center">
+                <div className="w-10 h-10 border-4 border-primary-color border-t-transparent rounded-full animate-spin mb-3" />
+                <p className="text-gray-400 text-sm">جاري التحقق من باقة النشاط...</p>
+            </div>
+        );
+    }
+
+    // 5. Merchant plan restriction
     if (!moduleKey || !isModuleEnabled(moduleKey)) {
         return (
             <div className="min-h-[60vh] flex flex-col items-center justify-center p-6 text-center">

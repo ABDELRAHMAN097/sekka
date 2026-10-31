@@ -10,11 +10,11 @@ const SEARCH_BY = [
 const ROLES = [
     ["all", "كل الأدوار"],
     ["customer", "عميل"],
-    ["driver", "سائق"],
-    ["staff", "ستاف / موظف"],
-    ["admin", "مدير"],
-    ["tenant_owner", "مالك النشاط"],
-    ["super_admin", "مدير عام"],
+    ["tenant_driver", "سائق (tenant_driver)"],
+    ["tenant_staf", "موظف (tenant_staf)"],
+    ["tenant_owner", "مالك النشاط (tenant_owner)"],
+    ["platform_admin", "مسؤول المنصة (platform_admin)"],
+    ["platform_staf", "فريق المنصة (platform_staf)"],
 ];
 
 const STATUSES = [

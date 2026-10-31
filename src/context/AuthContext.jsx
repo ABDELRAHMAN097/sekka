@@ -10,12 +10,19 @@ import { db } from "@/config/firebase";
 const AuthContext = createContext(null);
 
 const DASHBOARD_ROLES = [
+    "super_admin",
+    "admin",
+    "driver",
+    "worker",
+    "staff",
     "tenant_owner",
     "tenant_admin",
-    "staff",
-    "driver",
-    "admin",
-    "super_admin",
+    "tenant_staf",
+    "tenant_staff",
+    "tenant_driver",
+    "platform_admin",
+    "platform_staf",
+    "platform_staff",
 ];
 
 export const AuthProvider = ({ children }) => {
@@ -47,14 +54,14 @@ export const AuthProvider = ({ children }) => {
         try {
             const snapshot = await getDoc(doc(db, "platformRoles", uid));
             const data = snapshot.exists() ? snapshot.data() : null;
-            const role = data?.status === "active" && data?.role === "platform_admin"
-                ? "platform_admin"
+            const validPlatformRoles = ["platform_admin", "platform_staf", "platform_staff"];
+            const role = data?.status === "active" && validPlatformRoles.includes(data?.role)
+                ? data.role
                 : null;
 
             setPlatformRole(role);
             return role;
         } catch (error) {
-            console.error("Error loading platform role:", error);
             setPlatformRole(null);
             return null;
         }
@@ -75,29 +82,71 @@ export const AuthProvider = ({ children }) => {
             }
 
             try {
-                const [userProfile, role] = await Promise.all([
-                    getUserProfile(firebaseUser.uid),
-                    (async () => {
-                        const snapshot = await getDoc(
-                            doc(db, "platformRoles", firebaseUser.uid)
-                        );
-                        const data = snapshot.exists() ? snapshot.data() : null;
-                        return data?.status === "active" && data?.role === "platform_admin"
-                            ? "platform_admin"
-                            : null;
-                    })(),
-                ]);
+                // 1. Primary profile from /users/{uid} (conforms to Firestore security rules)
+                const userProfile = await getUserProfile(firebaseUser.uid);
+
+                // 2. Optional platform / tenant lookups (safely isolated so missing collections don't break auth)
+                let pRole = null;
+                try {
+                    const snapshot = await getDoc(doc(db, "platformRoles", firebaseUser.uid));
+                    const data = snapshot.exists() ? snapshot.data() : null;
+                    const valid = ["platform_admin", "platform_staf", "platform_staff"];
+                    if (data?.status === "active" && valid.includes(data?.role)) {
+                        pRole = data.role;
+                    }
+                } catch {
+                    pRole = null;
+                }
+
+                let tenantDocSnap = null;
+                try {
+                    const tSnap = await getDoc(doc(db, "tenants", firebaseUser.uid));
+                    tenantDocSnap = tSnap.exists() ? tSnap.data() : null;
+                } catch {
+                    tenantDocSnap = null;
+                }
 
                 if (!active) return;
 
-                setProfile(userProfile || {
+                let effectiveRole = String(userProfile?.role || "customer").toLowerCase().trim();
+                let effectiveTenantId = userProfile?.tenantId || "";
+
+                const isPlatformPrivileged = [
+                    "platform_admin",
+                    "super_admin",
+                    "platform_staf",
+                    "platform_staff",
+                    "admin",
+                ].includes(effectiveRole) || [
+                    "platform_admin",
+                    "platform_staf",
+                    "platform_staff"
+                ].includes(pRole);
+
+                // NEVER overwrite a platform administrator or super admin with tenant_owner
+                if (!isPlatformPrivileged && tenantDocSnap && (tenantDocSnap.role === "tenant_owner" || !effectiveRole || effectiveRole === "customer")) {
+                    effectiveRole = "tenant_owner";
+                    effectiveTenantId = firebaseUser.uid;
+                }
+
+                if (isPlatformPrivileged) {
+                    if (effectiveRole === "customer" && pRole) {
+                        effectiveRole = pRole;
+                    }
+                    effectiveTenantId = "";
+                }
+
+                setProfile({
                     uid: firebaseUser.uid,
-                    name: firebaseUser.displayName || "مستخدم",
+                    name: userProfile?.name || firebaseUser.displayName || "مستخدم",
                     email: firebaseUser.email,
-                    role: "customer",
-                    status: "active",
+                    phone: userProfile?.phone || firebaseUser.phoneNumber || "",
+                    ...userProfile,
+                    role: effectiveRole,
+                    tenantId: effectiveTenantId,
+                    status: userProfile?.status || "active",
                 });
-                setPlatformRole(role);
+                setPlatformRole(pRole);
             } catch (error) {
                 console.error("Error loading authentication data:", error);
                 if (!active) return;
@@ -120,19 +169,30 @@ export const AuthProvider = ({ children }) => {
         };
     }, []);
 
-    const role = profile?.role || "customer";
-    const isPlatformAdmin = platformRole === "platform_admin";
+    const role = String(profile?.role || "customer").toLowerCase().trim();
+    const isPlatformAdmin = role === "platform_admin" || platformRole === "platform_admin";
+    const isPlatformStaff = role === "platform_staf" || role === "platform_staff" || platformRole === "platform_staf" || platformRole === "platform_staff";
+    const isPlatformUser = isPlatformAdmin || isPlatformStaff;
     const isSuperAdmin = isPlatformAdmin || role === "super_admin";
-    const isAdmin = isPlatformAdmin || role === "admin" || role === "tenant_owner" || role === "tenant_admin";
-    const isDriver = role === "driver";
-    const isCustomer = role === "customer";
-    const canAccessDashboard = isPlatformAdmin || DASHBOARD_ROLES.includes(role);
+    const isTenantOwner = role === "tenant_owner";
+    const isTenantStaff = role === "tenant_staf" || role === "tenant_staff" || role === "staff";
+    const isTenantDriver = role === "tenant_driver" || role === "driver";
+    const isAdmin = isPlatformUser || isTenantOwner || role === "admin" || role === "tenant_admin" || role === "platform_admin";
+    const isDriver = isTenantDriver;
+    const isCustomer = !isPlatformUser && !DASHBOARD_ROLES.includes(role);
+    const canAccessDashboard = isPlatformUser || DASHBOARD_ROLES.includes(role);
 
     const hasRole = (allowedRoles = []) =>
         !allowedRoles.length ||
         isPlatformAdmin ||
+        isSuperAdmin ||
         allowedRoles.includes(role) ||
-        allowedRoles.includes(platformRole);
+        allowedRoles.includes(platformRole) ||
+        (allowedRoles.includes("admin") && isAdmin) ||
+        (allowedRoles.includes("super_admin") && isSuperAdmin) ||
+        (allowedRoles.includes("tenant_staf") && (role === "staff" || role === "tenant_staff")) ||
+        (allowedRoles.includes("tenant_driver") && role === "driver") ||
+        (allowedRoles.includes("platform_staf") && isPlatformStaff);
 
     return (
         <AuthContext.Provider value={{
@@ -142,7 +202,12 @@ export const AuthProvider = ({ children }) => {
             platformRole,
             loading,
             isPlatformAdmin,
+            isPlatformStaff,
+            isPlatformUser,
             isSuperAdmin,
+            isTenantOwner,
+            isTenantStaff,
+            isTenantDriver,
             isAdmin,
             isDriver,
             isCustomer,

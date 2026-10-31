@@ -1,0 +1,109 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // =========================================================
+    // Authentication & Role Helpers
+    // =========================================================
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    // Checks if current user is Super Admin or Platform Admin
+    function isSuperAdmin() {
+      return isSignedIn()
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ["super_admin", "platform_admin"];
+    }
+
+    // Checks if current user is Admin, Super Admin, or Platform Admin
+    function isAdmin() {
+      return isSignedIn()
+        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ["admin", "super_admin", "platform_admin"];
+    }
+
+
+    // =========================================================
+    // Users Collection (/users/{userId})
+    // =========================================================
+
+    match /users/{userId} {
+
+      // User can read their own profile. Admin and Super Admin can read all users.
+      allow get: if isSignedIn()
+        && (
+          request.auth.uid == userId
+          || isAdmin()
+        );
+
+      // Only Admin and Super Admin can list all users.
+      allow list: if isAdmin();
+
+      // New users can create their own account (role MUST be customer).
+      // Super Admin can also create user documents.
+      allow create: if (
+        isSignedIn()
+        && request.auth.uid == userId
+        && request.resource.data.role == "customer"
+      ) || isSuperAdmin();
+
+      // Updates:
+      // 1. Super Admin can update any user account.
+      // 2. Admin can update regular accounts (customer, driver, worker) but not Admin/Super Admin.
+      // 3. Normal users can update their own personal info (name, phone, imageUrl, updatedAt)
+      //    without altering role or status.
+      allow update: if isSuperAdmin()
+        || (
+          isAdmin()
+          && resource.data.role in ["customer", "driver", "worker"]
+          && request.resource.data.role in ["customer", "driver", "worker"]
+        )
+        || (
+          isSignedIn()
+          && request.auth.uid == userId
+          && request.resource.data.diff(resource.data)
+            .affectedKeys()
+            .hasOnly([
+              "name",
+              "phone",
+              "imageUrl",
+              "avatar",
+              "updatedAt"
+            ])
+        );
+
+      // Only Super Admin can delete users.
+      allow delete: if isSuperAdmin();
+    }
+
+
+    // =========================================================
+    // Landing Page Settings (/landingPage/settings)
+    // =========================================================
+
+    match /landingPage/settings {
+      // Landing page is public for all visitors
+      allow read: if true;
+
+      // Admin and Super Admin can modify Landing Page content
+      allow write: if isAdmin();
+    }
+
+
+    // =========================================================
+    // Multi-tenant & Config Subcollections (Optional Support)
+    // =========================================================
+
+    match /tenants/{tenantId}/{document=**} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    match /platformRoles/{userId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isSuperAdmin());
+      allow write: if isSuperAdmin();
+    }
+
+  }
+}

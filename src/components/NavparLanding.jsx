@@ -34,6 +34,8 @@ export default function NavbarLanding({
     const {
         user,
         canAccessDashboard,
+        isAdmin,
+        loading: authLoading,
     } = useAuth();
 
     const { tenantName, tenantId, tenantSlug } = useTenant();
@@ -232,65 +234,68 @@ export default function NavbarLanding({
                                 : "العربية"}
                         </Link>
 
-                        {/* Login */}
+                        {/* Auth Actions */}
+                        {authLoading ? (
+                            <div className="h-10 w-24 rounded-xl bg-white/5 animate-pulse" />
+                        ) : (
+                            <>
+                                {/* Login */}
+                                {!user && (
+                                    <Link
+                                        to={`/${locale}/login${tenantSlug ? `?slug=${tenantSlug}` : (tenantId ? `?tenant=${tenantId}` : "")}`}
+                                        className="rounded-xl border border-white/10 bg-white/10 px-5 py-2.5 text-sm transition hover:bg-white/15"
+                                    >
+                                        {t("nav.login")}
+                                    </Link>
+                                )}
 
-                        {!user && (
-                            <Link
-                                to={`/${locale}/login${tenantSlug ? `?slug=${tenantSlug}` : (tenantId ? `?tenant=${tenantId}` : "")}`}
-                                className="rounded-xl border border-white/10 bg-white/10 px-5 py-2.5 text-sm transition hover:bg-white/15"
-                            >
-                                {t("nav.login")}
-                            </Link>
-                        )}
-
-                        {/* Dashboard */}
-
-                        {user &&
-                            canAccessDashboard && (
-                                <button
-                                    type="button"
-                                    onClick={() =>
-                                        navigate(
-                                            `/${locale}/dashboard`
-                                        )
-                                    }
-                                    className="rounded-xl border border-white/10 bg-white/10 px-5 py-2.5 text-sm transition hover:bg-white/15"
-                                >
-                                    {t(
-                                        "nav.dashboard"
+                                {/* Dashboard */}
+                                {user &&
+                                    (canAccessDashboard || isAdmin) && (
+                                        <button
+                                            type="button"
+                                            onClick={() =>
+                                                navigate(
+                                                    `/${locale}/dashboard`
+                                                )
+                                            }
+                                            className="rounded-xl border border-white/10 bg-white/10 px-5 py-2.5 text-sm transition hover:bg-white/15"
+                                        >
+                                            {t(
+                                                "nav.dashboard"
+                                            )}
+                                        </button>
                                     )}
-                                </button>
-                            )}
 
-                        {/* Profile for Customers */}
+                                {/* Profile for Customers */}
+                                {user &&
+                                    !(canAccessDashboard || isAdmin) && (
+                                        <Link
+                                            to={`/${locale}/profile`}
+                                            className="rounded-xl border border-white/10 bg-white/10 px-5 py-2.5 text-sm transition hover:bg-white/15"
+                                        >
+                                            {isArabic ? "حسابي" : "Profile"}
+                                        </Link>
+                                    )}
 
-                        {user &&
-                            !canAccessDashboard && (
-                                <Link
-                                    to={`/${locale}/profile`}
-                                    className="rounded-xl border border-white/10 bg-white/10 px-5 py-2.5 text-sm transition hover:bg-white/15"
-                                >
-                                    {isArabic ? "حسابي" : "Profile"}
-                                </Link>
-                            )}
-
-                        {/* Logout */}
-
-                        {user && (
-                            <button
-                                type="button"
-                                onClick={
-                                    handleLogout
-                                }
-                                title={
-                                    isArabic
-                                        ? "تسجيل الخروج"
-                                        : "Logout"
-                                }
-                                className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 text-gray-300 transition hover:border-red-500/30 hover:bg-red-500/10 hover:text-red-400"
-                            >
-                                <RiLogoutBoxRLine className="h-5 w-5" />
-                            </button>
+                                {/* Logout */}
+                                {user && (
+                                    <button
+                                        type="button"
+                                        onClick={
+                                            handleLogout
+                                        }
+                                        title={
+                                            isArabic
+                                                ? "تسجيل الخروج"
+                                                : "Logout"
+                                        }
+                                        className="flex h-11 w-11 items-center justify-center rounded-xl border border-white/10 text-gray-300 transition hover:border-red-500/30 hover:bg-red-500/10 hover:text-red-400"
+                                    >
+                                        <RiLogoutBoxRLine className="h-5 w-5" />
+                                    </button>
+                                )}
+                            </>
                         )}
 
                         {/* Booking */}
@@ -370,54 +375,57 @@ export default function NavbarLanding({
 
                             <div className="grid grid-cols-2 gap-3 pt-3">
 
-                                {/* Login */}
-
-                                {!user && (
-                                    <Link
-                                        to={`/${locale}/login${tenantSlug ? `?slug=${tenantSlug}` : (tenantId ? `?tenant=${tenantId}` : "")}`}
-                                        onClick={
-                                            closeMenu
-                                        }
-                                        className="rounded-xl bg-white/10 py-3 text-center"
-                                    >
-                                        {t(
-                                            "nav.login"
+                                {authLoading ? (
+                                    <div className="col-span-2 h-11 rounded-xl bg-white/5 animate-pulse" />
+                                ) : (
+                                    <>
+                                        {/* Login */}
+                                        {!user && (
+                                            <Link
+                                                to={`/${locale}/login${tenantSlug ? `?slug=${tenantSlug}` : (tenantId ? `?tenant=${tenantId}` : "")}`}
+                                                onClick={
+                                                    closeMenu
+                                                }
+                                                className="rounded-xl bg-white/10 py-3 text-center"
+                                            >
+                                                {t(
+                                                    "nav.login"
+                                                )}
+                                            </Link>
                                         )}
-                                    </Link>
-                                )}
 
-                                {/* Dashboard */}
-
-                                {user &&
-                                    canAccessDashboard && (
-                                        <button
-                                            type="button"
-                                            onClick={() => {
-                                                closeMenu();
-                                                navigate(
-                                                    `/${locale}/dashboard`
-                                                );
-                                            }}
-                                            className="rounded-xl bg-white/10 py-3 text-center"
-                                        >
-                                            {t(
-                                                "nav.dashboard"
+                                        {/* Dashboard */}
+                                        {user &&
+                                            (canAccessDashboard || isAdmin) && (
+                                                <button
+                                                    type="button"
+                                                    onClick={() => {
+                                                        closeMenu();
+                                                        navigate(
+                                                            `/${locale}/dashboard`
+                                                        );
+                                                    }}
+                                                    className="rounded-xl bg-white/10 py-3 text-center"
+                                                >
+                                                    {t(
+                                                        "nav.dashboard"
+                                                    )}
+                                                </button>
                                             )}
-                                        </button>
-                                    )}
 
-                                {/* Profile for Customers */}
-
-                                {user &&
-                                    !canAccessDashboard && (
-                                        <Link
-                                            to={`/${locale}/profile`}
-                                            onClick={closeMenu}
-                                            className="rounded-xl bg-white/10 py-3 text-center"
-                                        >
-                                            {isArabic ? "حسابي" : "Profile"}
-                                        </Link>
-                                    )}
+                                        {/* Profile for Customers */}
+                                        {user &&
+                                            !(canAccessDashboard || isAdmin) && (
+                                                <Link
+                                                    to={`/${locale}/profile`}
+                                                    onClick={closeMenu}
+                                                    className="rounded-xl bg-white/10 py-3 text-center"
+                                                >
+                                                    {isArabic ? "حسابي" : "Profile"}
+                                                </Link>
+                                            )}
+                                    </>
+                                )}
 
                                 {/* Booking */}
 
