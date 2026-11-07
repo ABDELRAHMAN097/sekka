@@ -5,266 +5,290 @@ import {
     useEffect,
     useState,
     useCallback,
-    useRef,
 } from "react";
-import { resolveTenant, getTenant, calculateDaysRemaining } from "@/services/tenantService";
-import { useAuth } from "@/context/AuthContext";
+import { onAuthStateChanged } from "firebase/auth";
+import { doc, getDoc } from "firebase/firestore";
 
-const TenantContext = createContext(null);
-const IMPERSONATION_KEY = "sekka_impersonated_tenant";
-const STORED_TENANT_KEY = "sekka_tenant_id";
+import { auth } from "@/services/authService";
+import {
+    getBusinessOwnerBySlug,
+    getBusinessOwnerByDomain,
+} from "@/services/tenantService";
+import { db } from "@/config/firebase";
 
-/**
- * Detects any merchant tenant identifier from:
- * 1. URL search params (?tenant=... or ?slug=...)
- * 2. URL pathname (/t/:slug or /merchant/:slug)
- * 3. Stored session / local storage
- * 4. Subdomain (e.g. sara.sekka.com)
- * 5. Custom Domain (e.g. saracars.com)
- * 6. VITE_TENANT_ID environment variable (if explicitly set)
- */
-export const detectTenantIdentifier = () => {
+const AuthContext = createContext(null);
+
+const PLATFORM_ROLES = [
+    "super_admin",
+    "platform_admin",
+    "platform_staff",
+];
+
+const BUSINESS_ROLES = [
+    "business_owner",
+    "admin",
+    "staff",
+    "worker",
+    "driver",
+    "customer",
+];
+
+const PLATFORM_HOSTS = [
+    "sekka504.vercel.app",
+    "localhost",
+    "127.0.0.1",
+];
+
+const getSiteOwner = async () => {
     if (typeof window === "undefined") return null;
 
-    // 1. URL Query parameters (?tenant=... or ?slug=...)
-    try {
-        const search = window.location.search;
-        if (search) {
-            const params = new URLSearchParams(search);
-            const queryVal = params.get("tenant") || params.get("slug");
-            if (queryVal && queryVal.trim()) {
-                return queryVal.trim();
-            }
-        }
-    } catch {
-        // ignore
+    const hostname = window.location.hostname
+        .trim()
+        .toLowerCase();
+
+    if (PLATFORM_HOSTS.includes(hostname)) return null;
+
+    if (hostname.endsWith(".sekka504.vercel.app")) {
+        const slug = hostname.replace(".sekka504.vercel.app", "");
+
+        if (!slug || slug.includes(".")) return null;
+
+        return getBusinessOwnerBySlug(slug);
     }
 
-    // 2. Path parameter: /t/:slug or /merchant/:slug
-    try {
-        const pathname = window.location.pathname;
-        const pathMatch = pathname.match(/\/(?:t|merchant)\/([^/?#]+)/);
-        if (pathMatch && pathMatch[1] && pathMatch[1].trim()) {
-            return pathMatch[1].trim();
-        }
-    } catch {
-        // ignore
-    }
-
-    // 3. Stored active merchant from session/local storage
-    try {
-        const stored = sessionStorage.getItem(STORED_TENANT_KEY) || localStorage.getItem(STORED_TENANT_KEY);
-        if (stored && stored.trim()) {
-            return stored.trim();
-        }
-    } catch {
-        // ignore
-    }
-
-    // 4. Hostname: subdomain or custom domain
-    try {
-        const hostname = window.location.hostname;
-        if (hostname && hostname !== "localhost" && hostname !== "127.0.0.1") {
-            const parts = hostname.split(".");
-            // Subdomain (e.g. dealer.sekka.com)
-            if (parts.length >= 3 && !["www", "sekka"].includes(parts[0])) {
-                return parts[0];
-            }
-            // Custom domain (e.g. mydealership.com)
-            if (parts.length >= 2 && !hostname.includes("sekka.") && !hostname.includes("firebaseapp.com") && !hostname.includes("web.app")) {
-                return hostname;
-            }
-        }
-    } catch {
-        // ignore
-    }
-
-    // 5. Environment variable
-    if (import.meta.env.VITE_TENANT_ID && import.meta.env.VITE_TENANT_ID.trim()) {
-        return import.meta.env.VITE_TENANT_ID.trim();
-    }
-
-    return null;
-};
-
-const getStoredImpersonatedTenant = () => {
-    if (typeof window === "undefined") return null;
-
-    try {
-        return sessionStorage.getItem(IMPERSONATION_KEY);
-    } catch {
+    if (
+        hostname.endsWith(".vercel.app") ||
+        hostname.endsWith(".web.app") ||
+        hostname.endsWith(".firebaseapp.com")
+    ) {
         return null;
     }
+
+    return getBusinessOwnerByDomain(hostname);
 };
 
-export const TenantProvider = ({ children }) => {
-    const { user, profile, isPlatformAdmin, isSuperAdmin } = useAuth();
-    const isPlatformPrivileged = isPlatformAdmin || isSuperAdmin;
+const getPlatformRole = async (uid) => {
+    const snapshot = await getDoc(doc(db, "platformRoles", uid));
 
-    const [impersonatedId, setImpersonatedId] = useState(
-        getStoredImpersonatedTenant
-    );
-    const [tenantData, setTenantData] = useState(null);
+    if (!snapshot.exists()) return null;
+
+    const data = snapshot.data();
+    const role = String(data?.role || "").trim().toLowerCase();
+
+    return data?.status === "active" && PLATFORM_ROLES.includes(role)
+        ? role
+        : null;
+};
+
+const getCurrentProfile = async (uid) => {
+    const [platformRole, siteOwner] = await Promise.all([
+        getPlatformRole(uid).catch(() => null),
+        getSiteOwner().catch(() => null),
+    ]);
+
+    if (platformRole) {
+        const snapshot = await getDoc(doc(db, "users", uid));
+        const data = snapshot.exists() ? snapshot.data() : {};
+
+        return {
+            uid,
+            ...data,
+            role: platformRole,
+            platformRole,
+            status: data.status || "active",
+        };
+    }
+
+    if (siteOwner) {
+        const ownerUid = siteOwner.ownerUid || siteOwner.uid || siteOwner.id;
+
+        if (!ownerUid || siteOwner.status !== "active") {
+            return null;
+        }
+
+        const snapshot = await getDoc(
+            doc(db, "users", ownerUid, "users", uid)
+        );
+
+        if (!snapshot.exists()) return null;
+
+        const data = snapshot.data();
+        const role = String(data.role || "").trim().toLowerCase();
+
+        if (!BUSINESS_ROLES.includes(role) || data.status !== "active") {
+            return null;
+        }
+
+        return {
+            uid,
+            ...data,
+            role,
+            ownerUid,
+            ownerName: siteOwner.name || "",
+            ownerStatus: siteOwner.status,
+        };
+    }
+
+    const snapshot = await getDoc(doc(db, "users", uid));
+
+    if (!snapshot.exists()) return null;
+
+    const data = snapshot.data();
+    const role = String(data.role || "").trim().toLowerCase();
+
+    if (role !== "business_owner") return null;
+
+    return {
+        uid,
+        ...data,
+        role,
+        status: data.status || "pending",
+    };
+};
+
+export const AuthProvider = ({ children }) => {
+    const [user, setUser] = useState(null);
+    const [profile, setProfile] = useState(null);
+    const [platformRole, setPlatformRole] = useState(null);
     const [loading, setLoading] = useState(true);
 
-    const requestIdRef = useRef(0);
+    const refreshProfile = useCallback(async (uid) => {
+        const targetUid = uid || auth.currentUser?.uid;
 
-    const detectedId = detectTenantIdentifier();
-
-    // In dashboard routes: regular merchants and staff are locked to their own tenant.
-    // Platform admins operate in platform scope (tenantData = null) unless actively impersonating.
-    const isDashboardPath =
-        typeof window !== "undefined" &&
-        window.location.pathname.includes("/dashboard");
-
-    const activeIdentifier = isPlatformPrivileged
-        ? impersonatedId || null
-        : isDashboardPath && profile?.tenantId
-          ? profile.tenantId
-          : detectedId || profile?.tenantId || null;
-
-    const refreshTenant = useCallback(async (identifier = activeIdentifier) => {
-        const requestId = ++requestIdRef.current;
-
-        if (!identifier) {
-            setTenantData(null);
-            setLoading(false);
+        if (!targetUid) {
+            setProfile(null);
             return null;
         }
 
-        setLoading(true);
-
         try {
-            // resolveTenant handles doc ID, slug, and custom domain
-            const data = await resolveTenant(identifier);
-
-            if (requestId !== requestIdRef.current) return null;
-
-            if (data) {
-                setTenantData(data);
-                try {
-                    sessionStorage.setItem(STORED_TENANT_KEY, data.id);
-                    localStorage.setItem(STORED_TENANT_KEY, data.id);
-                } catch {
-                    // ignore
-                }
-            } else {
-                setTenantData(null);
-            }
+            const data = await getCurrentProfile(targetUid);
+            setProfile(data);
+            setPlatformRole(data?.platformRole || null);
             return data;
         } catch (error) {
-            if (requestId === requestIdRef.current) {
-                console.error("Error loading tenant:", error);
-                setTenantData(null);
-            }
-
+            console.error("Error refreshing profile:", error);
+            setProfile(null);
             return null;
-        } finally {
-            if (requestId === requestIdRef.current) {
-                setLoading(false);
-            }
         }
-    }, [activeIdentifier]);
-
-    useEffect(() => {
-        refreshTenant(activeIdentifier);
-
-        return () => {
-            requestIdRef.current += 1;
-        };
-    }, [activeIdentifier, user?.uid, refreshTenant]);
-
-    const switchTenant = useCallback((targetTenantId) => {
-        if (
-            !isPlatformAdmin ||
-            typeof targetTenantId !== "string" ||
-            !targetTenantId.trim()
-        ) {
-            return false;
-        }
-
-        const tenantId = targetTenantId.trim();
-
-        try {
-            sessionStorage.setItem(IMPERSONATION_KEY, tenantId);
-            sessionStorage.setItem(STORED_TENANT_KEY, tenantId);
-        } catch (error) {
-            console.error("Unable to save active tenant:", error);
-            return false;
-        }
-
-        setTenantData(null);
-        setLoading(true);
-        setImpersonatedId(tenantId);
-
-        return true;
-    }, [isPlatformAdmin]);
-
-    const exitImpersonation = useCallback(() => {
-        try {
-            sessionStorage.removeItem(IMPERSONATION_KEY);
-            sessionStorage.removeItem(STORED_TENANT_KEY);
-            localStorage.removeItem(STORED_TENANT_KEY);
-        } catch (error) {
-            console.error("Unable to clear active tenant:", error);
-        }
-
-        setTenantData(null);
-        setLoading(true);
-        setImpersonatedId(null);
     }, []);
 
-    const isModuleEnabled = useCallback((moduleKey) => {
-        if (loading || !tenantData || !moduleKey) {
-            return false;
+    const refreshPlatformRole = useCallback(async (uid) => {
+        if (!uid) {
+            setPlatformRole(null);
+            return null;
         }
 
-        return tenantData.modules?.[moduleKey] === true;
-    }, [loading, tenantData]);
+        try {
+            const role = await getPlatformRole(uid);
+            setPlatformRole(role);
+            return role;
+        } catch (error) {
+            setPlatformRole(null);
+            return null;
+        }
+    }, []);
 
-    const daysRemaining = calculateDaysRemaining(
-        tenantData?.subscription?.endDate
-    );
+    useEffect(() => {
+        let active = true;
 
-    const effectiveTenantId = tenantData?.id || (isPlatformAdmin ? impersonatedId : null) || null;
+        const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+            setLoading(true);
+            setUser(firebaseUser);
+            setProfile(null);
+            setPlatformRole(null);
+
+            if (!firebaseUser) {
+                setLoading(false);
+                return;
+            }
+
+            try {
+                const data = await getCurrentProfile(firebaseUser.uid);
+
+                if (!active) return;
+
+                setProfile(data);
+                setPlatformRole(data?.platformRole || null);
+            } catch (error) {
+                console.error("Error loading authentication data:", error);
+
+                if (active) {
+                    setProfile(null);
+                    setPlatformRole(null);
+                }
+            } finally {
+                if (active) setLoading(false);
+            }
+        });
+
+        return () => {
+            active = false;
+            unsubscribe();
+        };
+    }, []);
+
+    const role = profile?.role || null;
+
+    const isSuperAdmin = role === "super_admin";
+    const isPlatformAdmin = role === "platform_admin";
+    const isPlatformStaff = role === "platform_staff";
+    const isPlatformUser = PLATFORM_ROLES.includes(role);
+
+    const isBusinessOwner = role === "business_owner";
+    const isAdmin = isPlatformAdmin || isSuperAdmin ||
+        isBusinessOwner || role === "admin";
+    const isStaff = role === "staff";
+    const isWorker = role === "worker";
+    const isDriver = role === "driver";
+    const isCustomer = role === "customer";
+
+    const canAccessDashboard =
+        isPlatformUser ||
+        isBusinessOwner ||
+        ["admin", "staff", "worker", "driver"].includes(role);
+
+    const hasRole = useCallback((allowedRoles = []) => {
+        if (!allowedRoles.length) return true;
+        if (isSuperAdmin) return true;
+
+        return allowedRoles.includes(role) ||
+            allowedRoles.includes(platformRole);
+    }, [role, platformRole, isSuperAdmin]);
 
     const value = {
-        tenantId: effectiveTenantId,
-        tenant: tenantData,
-        loadingTenant: loading,
-        isImpersonating: Boolean(
-            isPlatformPrivileged && impersonatedId
-        ),
-        impersonatedTenantId: isPlatformPrivileged
-            ? impersonatedId
-            : null,
-        switchTenant,
-        exitImpersonation,
-        isModuleEnabled,
-        refreshTenant,
-        daysRemaining,
-        isExpiringSoon: daysRemaining <= 3 && daysRemaining > 0,
-        isExpired: daysRemaining <= 0,
-        tenantName: tenantData?.name || "",
-        tenantSlug: tenantData?.slug || "",
-        tenantModules: tenantData?.modules || {},
-        tenantSubscription: tenantData?.subscription || {},
+        user,
+        profile,
+        role,
+        platformRole,
+        loading,
+        isSuperAdmin,
+        isPlatformAdmin,
+        isPlatformStaff,
+        isPlatformUser,
+        isBusinessOwner,
+        isAdmin,
+        isStaff,
+        isWorker,
+        isDriver,
+        isCustomer,
+        canAccessDashboard,
+        hasRole,
+        refreshProfile,
+        refreshPlatformRole,
     };
 
     return (
-        <TenantContext.Provider value={value}>
+        <AuthContext.Provider value={value}>
             {children}
-        </TenantContext.Provider>
+        </AuthContext.Provider>
     );
 };
 
-export const useTenant = () => {
-    const context = useContext(TenantContext);
+export const useAuth = () => {
+    const context = useContext(AuthContext);
 
     if (!context) {
-        throw new Error(
-            "useTenant must be used within a TenantProvider"
-        );
+        throw new Error("useAuth must be used within an AuthProvider");
     }
 
     return context;

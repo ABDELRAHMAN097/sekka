@@ -1,77 +1,109 @@
 
-import { doc, getDoc, setDoc, serverTimestamp } from "firebase/firestore";
+import {
+    doc,
+    getDoc,
+    updateDoc,
+    serverTimestamp,
+} from "firebase/firestore";
 import { updateProfile } from "firebase/auth";
 import { auth, db } from "../config/firebase";
-import { USERS_COLLECTION, getSearchFields } from "./userUtils";
 
-const PROFILE_FIELDS = ["name", "phone", "imageUrl"];
-const SEARCH_FIELDS = ["name", "phone", "email"];
+const USERS_COLLECTION = "users";
 
-export const getUserProfile = async (uid) => {
-    if (!uid) return null;
+const PROFILE_FIELDS = [
+    "name",
+    "phone",
+    "imageUrl",
+    "dateOfBirth",
+    "city",
+    "address",
+    "documents",
+    "driverInfo",
+    "imagePublicId",
+    "publicId",
+];
 
-    try {
-        const snapshot = await getDoc(doc(db, USERS_COLLECTION, uid));
-        return snapshot.exists()
-            ? { id: snapshot.id, ...snapshot.data() }
-            : null;
-    } catch (error) {
-        console.error("Error fetching user profile:", error);
-        throw error;
-    }
+const getProfileRef = (uid, ownerUid) => {
+    const isBusinessUser = ownerUid && ownerUid !== uid;
+
+    return isBusinessUser
+        ? doc(db, USERS_COLLECTION, ownerUid, USERS_COLLECTION, uid)
+        : doc(db, USERS_COLLECTION, uid);
 };
 
-export const updateUserProfileData = async (userId, data = {}) => {
-    const currentUser = auth.currentUser;
-    const targetId = userId || currentUser?.uid;
+export const getUserProfile = async (uid, ownerUid = null) => {
+    if (!uid) return null;
 
-    if (!targetId) throw new Error("User ID is required.");
-    if (targetId !== currentUser?.uid) {
+    const isBusinessUser = ownerUid && ownerUid !== uid;
+    const snapshot = await getDoc(getProfileRef(uid, ownerUid));
+
+    if (!snapshot.exists()) return null;
+
+    return {
+        ...snapshot.data(),
+        id: snapshot.id,
+        uid: snapshot.id,
+        ...(isBusinessUser ? { ownerUid } : {}),
+    };
+};
+
+export const updateUserProfileData = async (
+    userId,
+    data = {},
+    ownerUid = null
+) => {
+    const currentUser = auth.currentUser;
+    const uid = userId || currentUser?.uid;
+
+    if (!currentUser || !uid) {
+        throw new Error("Authentication is required.");
+    }
+
+    if (uid !== currentUser.uid) {
         throw new Error("You can only update your own profile.");
     }
 
-    const userRef = doc(db, USERS_COLLECTION, targetId);
-    const existingSnapshot = await getDoc(userRef);
-    const existingData = existingSnapshot.exists() ? existingSnapshot.data() : {};
+    if (!data || typeof data !== "object" || Array.isArray(data)) {
+        throw new Error("Invalid profile data.");
+    }
 
     const cleanData = Object.fromEntries(
         PROFILE_FIELDS
-            .filter((key) => data[key] !== undefined)
-            .map((key) => [key, data[key]])
+            .filter((field) => data[field] !== undefined)
+            .map((field) => [field, data[field]])
     );
 
-    const updates = {
+    if (data.avatar !== undefined && data.imageUrl === undefined) {
+        cleanData.imageUrl = data.avatar;
+    }
+
+    if (!Object.keys(cleanData).length) return true;
+
+    const profileRef = getProfileRef(uid, ownerUid);
+    const snapshot = await getDoc(profileRef);
+
+    if (!snapshot.exists()) {
+        throw new Error("User profile not found.");
+    }
+
+    await updateDoc(profileRef, {
         ...cleanData,
         updatedAt: serverTimestamp(),
-    };
-
-    if (!existingSnapshot.exists()) {
-        updates.uid = targetId;
-        updates.name = cleanData.name ?? currentUser.displayName ?? "";
-        updates.email = currentUser.email ?? "";
-        updates.phone = cleanData.phone ?? currentUser.phoneNumber ?? "";
-        updates.role = "customer";
-        updates.status = "active";
-        updates.createdAt = serverTimestamp();
-
-        // Search fields only on document creation to adhere to user update security rules
-        Object.assign(
-            updates,
-            getSearchFields({
-                name: updates.name,
-                email: updates.email,
-                phone: updates.phone,
-            })
-        );
-    }
-
-    await setDoc(userRef, updates, { merge: true });
+    });
 
     const authUpdates = {};
-    if (cleanData.name !== undefined && cleanData.name !== currentUser.displayName) {
+
+    if (
+        cleanData.name !== undefined &&
+        cleanData.name !== currentUser.displayName
+    ) {
         authUpdates.displayName = cleanData.name;
     }
-    if (cleanData.imageUrl !== undefined && cleanData.imageUrl !== currentUser.photoURL) {
+
+    if (
+        cleanData.imageUrl !== undefined &&
+        cleanData.imageUrl !== currentUser.photoURL
+    ) {
         authUpdates.photoURL = cleanData.imageUrl;
     }
 

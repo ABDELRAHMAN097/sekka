@@ -4,61 +4,112 @@ service cloud.firestore {
   match /databases/{database}/documents {
 
     // =========================================================
-    // Authentication & Role Helpers
+    // 0. Base Authentication Helpers
     // =========================================================
 
     function isSignedIn() {
       return request.auth != null;
     }
 
-    // Checks if current user is Super Admin or Platform Admin
-    function isSuperAdmin() {
+    // =========================================================
+    // 1. Platform Helpers (Level 1) - Source: platformRoles/{uid}
+    // =========================================================
+
+    function hasActivePlatformRole(rolesList) {
       return isSignedIn()
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ["super_admin", "platform_admin"];
+        && (
+          (
+            exists(/databases/$(database)/documents/platformRoles/$(request.auth.uid))
+            && get(/databases/$(database)/documents/platformRoles/$(request.auth.uid)).data.status == "active"
+            && get(/databases/$(database)/documents/platformRoles/$(request.auth.uid)).data.role in rolesList
+          )
+          // Backward compatibility fallback during migration
+          || (
+            exists(/databases/$(database)/documents/users/$(request.auth.uid))
+            && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ["super_admin", "platform_admin"]
+          )
+        );
     }
 
-    // Checks if current user is Admin, Super Admin, or Platform Admin
-    function isAdmin() {
-      return isSignedIn()
-        && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ["admin", "super_admin", "platform_admin"];
+    function isPlatformAdmin() {
+      return hasActivePlatformRole(["platform_admin"]);
     }
 
+    function isPlatformStaff() {
+      return hasActivePlatformRole(["platform_admin", "platform_staff", "platform_staf"]);
+    }
 
     // =========================================================
-    // Users Collection (/users/{userId})
+    // 2. Tenant Member Helpers (Level 2) - Source: tenants/{tenantId}/members/{uid}
+    // =========================================================
+
+    function getTenantMemberDoc(tenantId) {
+      return get(/databases/$(database)/documents/tenants/$(tenantId)/members/$(request.auth.uid));
+    }
+
+    function isTenantMember(tenantId) {
+      return isSignedIn()
+        && exists(/databases/$(database)/documents/tenants/$(tenantId)/members/$(request.auth.uid))
+        && getTenantMemberDoc(tenantId).data.status == "active";
+    }
+
+    function isTenantOwner(tenantId) {
+      return isPlatformAdmin() || (
+        isTenantMember(tenantId)
+        && getTenantMemberDoc(tenantId).data.role == "tenant_owner"
+      );
+    }
+
+    function isTenantAdmin(tenantId) {
+      return isPlatformAdmin() || (
+        isTenantMember(tenantId)
+        && getTenantMemberDoc(tenantId).data.role in ["tenant_owner", "tenant_admin"]
+      );
+    }
+
+    function isTenantStaff(tenantId) {
+      return isPlatformAdmin() || (
+        isTenantMember(tenantId)
+        && getTenantMemberDoc(tenantId).data.role in ["tenant_owner", "tenant_admin", "tenant_staff", "tenant_staf"]
+      );
+    }
+
+    function isTenantDriver(tenantId) {
+      return isPlatformAdmin() || (
+        isTenantMember(tenantId)
+        && getTenantMemberDoc(tenantId).data.role == "tenant_driver"
+      );
+    }
+
+    function hasTenantAccess(tenantId) {
+      return isPlatformStaff() || isTenantMember(tenantId);
+    }
+
+    // =========================================================
+    // 3. Central User Account (Level 4) - Source: users/{uid}
+    // Profile & account status only, NOT primary authority for permissions
     // =========================================================
 
     match /users/{userId} {
+      // User can read their own profile. Platform staff and platform admin can read any profile.
+      allow get: if isSignedIn() && (
+        request.auth.uid == userId
+        || isPlatformStaff()
+      );
 
-      // User can read their own profile. Admin and Super Admin can read all users.
-      allow get: if isSignedIn()
-        && (
-          request.auth.uid == userId
-          || isAdmin()
-        );
+      // List all users: Only platform staff and admin
+      allow list: if isPlatformStaff();
 
-      // Only Admin and Super Admin can list all users.
-      allow list: if isAdmin();
-
-      // New users can create their own account (role MUST be customer).
-      // Super Admin can also create user documents.
+      // Create profile: User creating own document (role default customer) or platform admin
       allow create: if (
         isSignedIn()
         && request.auth.uid == userId
-        && request.resource.data.role == "customer"
-      ) || isSuperAdmin();
+      ) || isPlatformAdmin();
 
-      // Updates:
-      // 1. Super Admin can update any user account.
-      // 2. Admin can update regular accounts (customer, driver, worker) but not Admin/Super Admin.
-      // 3. Normal users can update their own personal info (name, phone, imageUrl, updatedAt)
-      //    without altering role or status.
-      allow update: if isSuperAdmin()
-        || (
-          isAdmin()
-          && resource.data.role in ["customer", "driver", "worker"]
-          && request.resource.data.role in ["customer", "driver", "worker"]
-        )
+      // Update:
+      // 1. Platform admin can update anything
+      // 2. User can update their own personal info without altering role or security status
+      allow update: if isPlatformAdmin()
         || (
           isSignedIn()
           && request.auth.uid == userId
@@ -69,40 +120,161 @@ service cloud.firestore {
               "phone",
               "imageUrl",
               "avatar",
-              "updatedAt"
+              "city",
+              "address",
+              "nationalId",
+              "licenseNumber",
+              "birthDate",
+              "updatedAt",
+              "name_normalized",
+              "name_keywords",
+              "phone_normalized",
+              "email_normalized",
+              "tenantId"
             ])
         );
 
-      // Only Super Admin can delete users.
-      allow delete: if isSuperAdmin();
+      // Only platform admin can delete user profiles
+      allow delete: if isPlatformAdmin();
     }
 
+    // =========================================================
+    // 4. Platform Roles Collection - Source: platformRoles/{userId}
+    // =========================================================
+
+    match /platformRoles/{userId} {
+      // User can read their own platform role, platform staff/admin can read all
+      allow read: if isSignedIn() && (request.auth.uid == userId || isPlatformStaff());
+      // Only platform admin can grant/modify/revoke platform roles
+      allow write: if isPlatformAdmin();
+    }
 
     // =========================================================
-    // Landing Page Settings (/landingPage/settings)
+    // 5. Tenant Documents & Subcollections (Level 2 & Level 3)
+    // =========================================================
+
+    match /tenants/{tenantId} {
+      // Any visitor (anonymous or customer) can read active tenant basic info for storefront
+      allow read: if true;
+
+      // Only platform admin can create tenants or change subscriptions/status/modules
+      // Tenant owner can update branding & contact details
+      allow create, delete: if isPlatformAdmin();
+      allow update: if isPlatformAdmin()
+        || (
+          isTenantOwner(tenantId)
+          && !request.resource.data.diff(resource.data).affectedKeys().hasAny(["id", "subscription", "modules", "status"])
+        );
+
+      // 5.1 Tenant Landing Config (/tenants/{tenantId}/config/landing)
+      match /config/landing {
+        // Public for landing page visitors
+        allow read: if true;
+        // Tenant admin/owner or platform admin can update landing page
+        allow write: if isTenantAdmin(tenantId);
+      }
+
+      // 5.2 Tenant Members (/tenants/{tenantId}/members/{memberUid})
+      match /members/{memberUid} {
+        // Member can read their own doc; tenant staff/admins/owner & platform staff can read all members
+        allow get: if isSignedIn() && (
+          request.auth.uid == memberUid
+          || hasTenantAccess(tenantId)
+        );
+        allow list: if hasTenantAccess(tenantId);
+
+        // Tenant owner and platform admin can add/update/delete members
+        // Tenant admin can manage staff and drivers
+        allow create, update: if isPlatformAdmin()
+          || isTenantOwner(tenantId)
+          || (
+            isTenantAdmin(tenantId)
+            && request.resource.data.role in ["tenant_staff", "tenant_staf", "tenant_driver"]
+            && (!exists(/databases/$(database)/documents/tenants/$(tenantId)/members/$(memberUid)) || resource.data.role != "tenant_owner")
+          );
+
+        allow delete: if isPlatformAdmin()
+          || isTenantOwner(tenantId)
+          || (
+            isTenantAdmin(tenantId)
+            && resource.data.role in ["tenant_staff", "tenant_staf", "tenant_driver"]
+          );
+      }
+
+      // 5.3 Tenant Customers (/tenants/{tenantId}/customers/{customerUid})
+      match /customers/{customerUid} {
+        // Customer can read their own doc; tenant staff/management & platform staff can read
+        allow get: if isSignedIn() && (
+          request.auth.uid == customerUid
+          || hasTenantAccess(tenantId)
+        );
+        allow list: if hasTenantAccess(tenantId);
+
+        // Customer can self-register or update their own profile; tenant staff/admin can manage
+        allow create: if isSignedIn() && (
+          request.auth.uid == customerUid
+          || isTenantStaff(tenantId)
+        );
+        allow update: if isSignedIn() && (
+          (request.auth.uid == customerUid && !request.resource.data.diff(resource.data).affectedKeys().hasAny(["role", "status"]))
+          || isTenantStaff(tenantId)
+        );
+        allow delete: if isTenantAdmin(tenantId);
+      }
+
+      // 5.4 Cars / Fleet (/tenants/{tenantId}/cars/{carId})
+      match /cars/{carId} {
+        allow read: if true;
+        allow write: if isTenantStaff(tenantId);
+      }
+
+      // 5.5 Bookings / Reservations (/tenants/{tenantId}/bookings/{bookingId})
+      match /bookings/{bookingId} {
+        // Customer can read their own booking; driver can read assigned booking; tenant staff can read all
+        allow get: if isSignedIn() && (
+          resource.data.customerId == request.auth.uid
+          || resource.data.driverId == request.auth.uid
+          || isTenantStaff(tenantId)
+        );
+        allow list: if isTenantStaff(tenantId)
+          || (isSignedIn() && request.query.limit <= 50);
+
+        // Customer can create booking with their own uid; tenant staff can create
+        allow create: if isSignedIn() && (
+          request.resource.data.customerId == request.auth.uid
+          || isTenantStaff(tenantId)
+        );
+
+        // Customer can update notes on own booking; driver can update assigned trip status; staff can manage
+        allow update: if isTenantStaff(tenantId)
+          || (
+            isSignedIn()
+            && resource.data.driverId == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "driverNotes", "updatedAt"])
+          )
+          || (
+            isSignedIn()
+            && resource.data.customerId == request.auth.uid
+            && request.resource.data.diff(resource.data).affectedKeys().hasOnly(["status", "customerNotes", "updatedAt"])
+          );
+
+        allow delete: if isTenantAdmin(tenantId);
+      }
+
+      // 5.6 Catch-all for any other subcollections in this tenant
+      match /{document=**} {
+        allow read: if hasTenantAccess(tenantId);
+        allow write: if isTenantAdmin(tenantId);
+      }
+    }
+
+    // =========================================================
+    // 6. Central Landing Settings (Platform Level)
     // =========================================================
 
     match /landingPage/settings {
-      // Landing page is public for all visitors
       allow read: if true;
-
-      // Admin and Super Admin can modify Landing Page content
-      allow write: if isAdmin();
-    }
-
-
-    // =========================================================
-    // Multi-tenant & Config Subcollections (Optional Support)
-    // =========================================================
-
-    match /tenants/{tenantId}/{document=**} {
-      allow read: if true;
-      allow write: if isAdmin();
-    }
-
-    match /platformRoles/{userId} {
-      allow read: if isSignedIn() && (request.auth.uid == userId || isSuperAdmin());
-      allow write: if isSuperAdmin();
+      allow write: if isPlatformAdmin();
     }
 
   }

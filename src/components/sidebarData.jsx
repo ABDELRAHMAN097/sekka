@@ -8,13 +8,13 @@ import { FiUser, FiShield } from "react-icons/fi";
 import { TbFileText, TbSettings } from "react-icons/tb";
 
 export const menuItems = [
-    {
-        name: "SekkaAdmin",
-        path: "/sekka-admin",
-        icon: FiShield,
-        allowedRoles: ["super_admin", "platform_admin", "platform_staf", "platform_staff"],
-        isMasterAdmin: true,
-    },
+    // {
+    //     name: "SekkaAdmin",
+    //     path: "/sekka-admin",
+    //     icon: FiShield,
+    //     allowedRoles: ["super_admin", "platform_admin", "platform_staf", "platform_staff"],
+    //     isMasterAdmin: true,
+    // },
     {
         name: "Dashboard",
         path: "/dashboard",
@@ -41,14 +41,14 @@ export const menuItems = [
         moduleKey: "editLanding",
         allowedRoles: ["admin", "super_admin", "platform_admin", "tenant_owner", "tenant_admin", "tenant_staf", "tenant_staff"],
     },
-    {
-        name: "LandingPage",
-        path: "/LandingPage",
-        icon: HiOutlineClipboardList,
-        moduleKey: "editLanding",
-        hasSubmenu: true,
-        allowedRoles: ["admin", "super_admin", "platform_admin", "tenant_owner", "tenant_admin", "tenant_staf", "tenant_staff"],
-    },
+    // {
+    //     name: "LandingPage",
+    //     path: "/LandingPage",
+    //     icon: HiOutlineClipboardList,
+    //     moduleKey: "editLanding",
+    //     hasSubmenu: true,
+    //     allowedRoles: ["admin", "super_admin", "platform_admin", "tenant_owner", "tenant_admin", "tenant_staf", "tenant_staff"],
+    // },
     {
         name: "Wallet",
         path: "/wallet",

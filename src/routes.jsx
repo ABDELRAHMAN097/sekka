@@ -2,7 +2,6 @@ import { Navigate } from "react-router-dom";
 
 import AuthLayout from "@/layouts/AuthLayout";
 import DashboardLayout from "@/layouts/DashboardLayout";
-import RoleGuard from "@/components/common/RoleGuard";
 import AuthGuard from "@/components/common/AuthGuard";
 
 import ForgotPassword from "@/pages/auth/ForgotPassword";
@@ -19,8 +18,6 @@ import Setting from "@/pages/dashboard/Setting";
 import Wallet from "@/pages/dashboard/Wallet";
 import Reports from "@/pages/dashboard/Reports";
 import LandingPage from "@/pages/LandingPage";
-import SekkaMasterDashboard from "@/pages/sekka/SekkaMasterDashboard";
-import ModuleGuard from "@/components/common/ModuleGuard";
 
 import { DEFAULT_LOCALE } from "./i18n/i18n/constant";
 import I18nProvider from "./i18n/i18n/I18nProvider";
@@ -35,10 +32,7 @@ export const routes = [
         path: "/:locale",
         element: <I18nProvider />,
         children: [
-            {
-                index: true,
-                element: <LandingPage />,
-            },
+            
             {
                 path: "t/:tenantSlug",
                 element: <LandingPage />,
@@ -86,100 +80,29 @@ export const routes = [
 
             // Management and Staff dashboard routes
             {
-                element: <RoleGuard />,
                 children: [
                     {
                         element: <DashboardLayout />,
                         children: [
-                            {
-                                path: "sekka-admin",
-                                element: (
-                                    <RoleGuard
-                                        allowedRoles={["super_admin"]}
-                                    />
-                                ),
-                                children: [
-                                    {
-                                        index: true,
-                                        element: <SekkaMasterDashboard />,
-                                    },
-                                ],
-                            },
                             {
                                 path: "dashboard",
                                 element: <Dashboard />,
                             },
                             {
                                 path: "users",
-                                element: (
-                                    <RoleGuard
-                                        allowedRoles={[
-                                            "admin",
-                                            "super_admin",
-                                            "platform_admin",
-                                            "tenant_owner",
-                                            "tenant_admin",
-                                        ]}
-                                    />
-                                ),
-                                children: [
-                                    {
-                                        index: true,
-                                        element: (
-                                            <ModuleGuard moduleKey="users">
-                                                <Users />
-                                            </ModuleGuard>
-                                        ),
-                                    },
-                                ],
+                                element: <Users />,
                             },
                             {
                                 path: "setting",
-                                element: (
-                                    <ModuleGuard moduleKey="editLanding">
-                                        <Setting
-                                            allowedRoles={[
-                                                "admin",
-                                                "super_admin",
-                                                "platform_admin",
-                                                "tenant_owner",
-                                                "tenant_admin",
-                                            ]}
-                                        />
-                                    </ModuleGuard>
-                                ),
-                            },
-                            {
-                                path: "EditLanding",
-                                element: (
-                                    <ModuleGuard moduleKey="editLanding">
-                                        <Setting
-                                            allowedRoles={[
-                                                "admin",
-                                                "super_admin",
-                                                "platform_admin",
-                                                "tenant_owner",
-                                                "tenant_admin",
-                                            ]}
-                                        />
-                                    </ModuleGuard>
-                                ),
+                                element:  <Setting />,
                             },
                             {
                                 path: "wallet",
-                                element: (
-                                    <ModuleGuard moduleKey="wallet">
-                                        <Wallet />
-                                    </ModuleGuard>
-                                ),
+                                element:  <Wallet />,
                             },
                             {
                                 path: "reports",
-                                element: (
-                                    <ModuleGuard moduleKey="reports">
-                                        <Reports />
-                                    </ModuleGuard>
-                                ),
+                                element:  <Reports />,
                             },
                         ],
                     },

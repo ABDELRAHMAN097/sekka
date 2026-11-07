@@ -12,219 +12,288 @@ import {
     reauthenticateWithCredential,
     EmailAuthProvider,
 } from "firebase/auth";
+
 import {
     doc,
     setDoc,
     getDoc,
-    updateDoc,
     serverTimestamp,
 } from "firebase/firestore";
+
 import { auth, db } from "../config/firebase";
+import { getSearchFields } from "./userUtils";
 import {
-    USERS_COLLECTION,
-    getSearchFields,
-    saveUserSearchFields,
-} from "./userUtils";
-import { resolveTenant } from "./tenantService";
+    getBusinessOwnerBySlug,
+    getBusinessOwnerByDomain,
+} from "./tenantService";
 
 export const googleProvider = new GoogleAuthProvider();
 
-/**
- * Resolves the effective merchant tenant ID from:
- * 1. Explicit parameter (ID or slug)
- * 2. URL search parameters (?tenant=... or ?slug=...)
- * 3. Path (/t/:slug)
- * 4. Stored session or local storage
- * 5. Hostname (subdomain or custom domain)
- * 6. Environment variable
- */
-export const getPublicTenantId = async (tenantId = null) => {
-    // 1. Explicit argument
-    if (tenantId) {
-        const resolved = await resolveTenant(tenantId);
-        if (resolved) return resolved.id;
-    }
+const PLATFORM_HOST = "sekka504.vercel.app";
 
+const PLATFORM_ROLES = [
+    "super_admin",
+    "platform_admin",
+    "platform_staff",
+];
+
+const BUSINESS_OWNER_ROLES = [
+    "business_owner",
+];
+
+const BUSINESS_USER_ROLES = [
+    "admin",
+    "staff",
+    "worker",
+    "driver",
+    "customer",
+];
+
+const normalizeRole = (role) =>
+    String(role || "").trim().toLowerCase();
+
+const getOwnerUid = (owner) =>
+    owner?.ownerUid || owner?.id || owner?.uid || null;
+
+export const getPublicBusinessOwner = async () => {
     if (typeof window === "undefined") return null;
 
-    // 2. URL query parameters
-    try {
-        const search = window.location.search;
-        if (search) {
-            const params = new URLSearchParams(search);
-            const queryVal = params.get("tenant") || params.get("slug");
-            if (queryVal && queryVal.trim()) {
-                const resolved = await resolveTenant(queryVal.trim());
-                if (resolved) {
-                    try {
-                        sessionStorage.setItem("sekka_tenant_id", resolved.id);
-                    } catch {}
-                    return resolved.id;
-                }
-            }
-        }
-    } catch {
-        // ignore
+    const hostname = window.location.hostname.trim().toLowerCase();
+
+    if (
+        hostname === PLATFORM_HOST ||
+        hostname === "localhost" ||
+        hostname === "127.0.0.1"
+    ) {
+        return null;
     }
 
-    // 3. Path parameter: /t/:slug or /merchant/:slug
-    try {
-        const pathname = window.location.pathname;
-        const match = pathname.match(/\/(?:t|merchant)\/([^/?#]+)/);
-        if (match && match[1]) {
-            const resolved = await resolveTenant(match[1]);
-            if (resolved) {
-                try {
-                    sessionStorage.setItem("sekka_tenant_id", resolved.id);
-                } catch {}
-                return resolved.id;
-            }
-        }
-    } catch {
-        // ignore
+    if (hostname.endsWith(`.${PLATFORM_HOST}`)) {
+        const slug = hostname.slice(0, -(PLATFORM_HOST.length + 1));
+
+        if (!slug || slug.includes(".")) return null;
+
+        return getBusinessOwnerBySlug(slug);
     }
 
-    // 4. Stored active merchant in storage
-    try {
-        const stored = sessionStorage.getItem("sekka_tenant_id") || localStorage.getItem("sekka_tenant_id");
-        if (stored && stored.trim()) {
-            return stored.trim();
-        }
-    } catch {
-        // ignore
+    if (
+        hostname.endsWith(".vercel.app") ||
+        hostname.endsWith(".web.app") ||
+        hostname.endsWith(".firebaseapp.com")
+    ) {
+        return null;
     }
 
-    // 5. Hostname: subdomain or custom domain
-    try {
-        const hostname = window.location.hostname;
-        if (hostname && hostname !== "localhost" && hostname !== "127.0.0.1") {
-            const parts = hostname.split(".");
-            if (parts.length >= 3 && !["www", "sekka"].includes(parts[0])) {
-                const resolved = await resolveTenant(parts[0]);
-                if (resolved) return resolved.id;
-            }
-            if (parts.length >= 2 && !hostname.includes("sekka.") && !hostname.includes("firebaseapp.com") && !hostname.includes("web.app")) {
-                const resolved = await resolveTenant(hostname);
-                if (resolved) return resolved.id;
-            }
-        }
-    } catch {
-        // ignore
-    }
-
-    // 6. Optional env variable
-    if (import.meta.env.VITE_TENANT_ID && import.meta.env.VITE_TENANT_ID.trim()) {
-        const resolved = await resolveTenant(import.meta.env.VITE_TENANT_ID.trim());
-        if (resolved) return resolved.id;
-    }
-
-    return null;
+    return getBusinessOwnerByDomain(hostname);
 };
 
-/**
- * Saves user profile in root /users/{uid} document.
- */
-const saveUserProfile = async (user, { name = "", phone = "", tenantId = null, isNewUser = false }) => {
-    const userRef = doc(db, USERS_COLLECTION, user.uid);
-    const displayName = name || user.displayName || "مستخدم";
-    const userPhone = phone || user.phoneNumber || "";
-    const userEmail = user.email || "";
+const getRootUserRef = (uid) =>
+    doc(db, "users", uid);
 
-    const searchFields = getSearchFields({
-        name: displayName,
-        email: userEmail,
-        phone: userPhone,
-    });
+const getBusinessUserRef = (ownerUid, userUid) =>
+    doc(db, "users", ownerUid, "users", userUid);
 
-    const profile = {
+const getActivePlatformRole = async (uid) => {
+    const snapshot = await getDoc(doc(db, "platformRoles", uid));
+
+    if (!snapshot.exists()) return null;
+
+    const data = snapshot.data();
+    const role = normalizeRole(data.role);
+
+    return data.status === "active" && PLATFORM_ROLES.includes(role)
+        ? role
+        : null;
+};
+
+const buildProfile = (user, data, role, status) => {
+    const name = data.name || user.displayName || "مستخدم";
+    const email = user.email || data.email || "";
+    const phone = data.phone || user.phoneNumber || "";
+
+    return {
+        ...data,
         uid: user.uid,
-        name: displayName,
-        email: userEmail,
-        phone: userPhone,
-        role: "customer",
-        status: "active",
-        tenantId: tenantId || "",
-        ...searchFields,
-        createdAt: serverTimestamp(),
+        name,
+        email,
+        emailNormalized: email.toLowerCase().trim(),
+        phone,
+        ...getSearchFields({ name, email, phone }),
+        role,
+        status,
         updatedAt: serverTimestamp(),
     };
+};
 
-    // For brand new registration: write directly to avoid read rule failures on non-existent documents
-    if (isNewUser) {
-        await setDoc(userRef, profile);
-        return profile;
+const saveOwnerProfile = async (
+    user,
+    { name = "", phone = "" } = {}
+) => {
+    const userRef = getRootUserRef(user.uid);
+    const snapshot = await getDoc(userRef);
+    const existing = snapshot.exists() ? snapshot.data() : {};
+
+    if (
+        snapshot.exists() &&
+        !BUSINESS_OWNER_ROLES.includes(normalizeRole(existing.role))
+    ) {
+        throw new Error("هذا الحساب مرتبط بدور آخر ولا يمكن تسجيله كصاحب نشاط.");
     }
 
-    try {
-        const existing = await getDoc(userRef);
-        if (existing.exists()) {
-            const existingData = existing.data();
-            await saveUserSearchFields(user.uid, existingData);
+    const status = existing.status || "pending";
 
-            if (!existingData.tenantId && tenantId) {
-                try {
-                    await updateDoc(userRef, { tenantId, updatedAt: serverTimestamp() });
-                } catch (e) {
-                    console.warn("Could not attach tenantId to existing user:", e);
-                }
-            }
-            return existingData;
-        }
-    } catch (readErr) {
-        console.warn("User profile read skipped (proceeding to write):", readErr?.message);
-    }
+    const profile = buildProfile(
+        user,
+        {
+            ...existing,
+            name: name || existing.name,
+            phone: phone || existing.phone,
+        },
+        "business_owner",
+        status
+    );
 
-    await setDoc(userRef, profile, { merge: true });
+    await setDoc(userRef, {
+        ...profile,
+        role: "business_owner",
+        status,
+        createdAt: existing.createdAt || serverTimestamp(),
+    }, { merge: true });
+
     return profile;
 };
 
-/**
- * Links a customer to a merchant tenant subcollection:
- * /tenants/{tenantId}/customers/{user.uid}
- */
-export const linkTenantCustomer = async (user, tenantIdOrSlug) => {
-    if (!tenantIdOrSlug || !user?.uid) return;
+const saveBusinessUserProfile = async (
+    user,
+    ownerUid,
+    { name = "", phone = "", role = "customer" } = {}
+) => {
+    if (!ownerUid) {
+        throw new Error("تعذر تحديد حساب صاحب النشاط.");
+    }
 
-    try {
-        const tenant = await resolveTenant(tenantIdOrSlug);
-        if (!tenant || tenant.status !== "active") {
-            return;
-        }
+    const userRef = getBusinessUserRef(ownerUid, user.uid);
+    const snapshot = await getDoc(userRef);
+    const existing = snapshot.exists() ? snapshot.data() : {};
 
-        const tenantId = tenant.id;
-        const customerRef = doc(db, "tenants", tenantId, "customers", user.uid);
+    if (snapshot.exists() && existing.status !== "active") {
+        throw new Error("هذا الحساب غير نشط. يرجى التواصل مع إدارة النشاط.");
+    }
 
-        const customerData = {
+    const finalRole = normalizeRole(existing.role || role);
+
+    if (!BUSINESS_USER_ROLES.includes(finalRole)) {
+        throw new Error("دور هذا الحساب غير صالح داخل النشاط.");
+    }
+
+    const status = existing.status || "active";
+
+    const profile = buildProfile(
+        user,
+        {
+            ...existing,
+            name: name || existing.name,
+            phone: phone || existing.phone,
+        },
+        finalRole,
+        status
+    );
+
+    await setDoc(userRef, {
+        ...profile,
+        ownerUid,
+        role: finalRole,
+        status,
+        createdAt: existing.createdAt || serverTimestamp(),
+    }, { merge: true });
+
+    return profile;
+};
+
+const getLoginProfile = async (user) => {
+    const platformRole = await getActivePlatformRole(user.uid);
+
+    if (platformRole) {
+        const snapshot = await getDoc(getRootUserRef(user.uid));
+        const data = snapshot.exists() ? snapshot.data() : {};
+
+        return {
+            ...data,
             uid: user.uid,
-            name: user.displayName || user.name || "عميل",
-            email: user.email || "",
-            phone: user.phoneNumber || user.phone || "",
-            role: "", // Empty role string for customer as per DB requirements
+            role: platformRole,
             status: "active",
-            updatedAt: serverTimestamp(),
+            platformRole,
         };
+    }
 
-        // Using setDoc with merge: true safely creates or updates without requiring getDoc
-        await setDoc(customerRef, {
-            ...customerData,
-            createdAt: serverTimestamp(),
-        }, { merge: true });
+    const owner = await getPublicBusinessOwner();
 
-        // Update root user profile with tenantId safely (preserve original registration merchant)
-        try {
-            const userRef = doc(db, USERS_COLLECTION, user.uid);
-            const userSnap = await getDoc(userRef);
-            if (userSnap.exists() && !userSnap.data()?.tenantId) {
-                await updateDoc(userRef, {
-                    tenantId,
-                    updatedAt: serverTimestamp(),
-                });
-            }
-        } catch {
-            // ignore
+    if (owner) {
+        if (owner.status !== "active") {
+            throw new Error("موقع النشاط غير مفعل حاليًا.");
         }
+
+        const ownerUid = getOwnerUid(owner);
+
+        if (!ownerUid) {
+            throw new Error("تعذر تحديد حساب صاحب النشاط.");
+        }
+
+        const snapshot = await getDoc(
+            getBusinessUserRef(ownerUid, user.uid)
+        );
+
+        if (!snapshot.exists()) {
+            throw new Error("لا يوجد حساب مرتبط بهذا النشاط.");
+        }
+
+        const data = snapshot.data();
+        const role = normalizeRole(data.role);
+
+        if (!BUSINESS_USER_ROLES.includes(role)) {
+            throw new Error("دور هذا الحساب غير صالح داخل النشاط.");
+        }
+
+        if (data.status !== "active") {
+            throw new Error("هذا الحساب غير نشط. يرجى التواصل مع إدارة النشاط.");
+        }
+
+        return {
+            ...data,
+            uid: user.uid,
+            ownerUid,
+            role,
+            status: data.status,
+        };
+    }
+
+    const snapshot = await getDoc(getRootUserRef(user.uid));
+
+    if (!snapshot.exists()) {
+        throw new Error("لا يوجد حساب صاحب نشاط مرتبط بهذا المستخدم.");
+    }
+
+    const data = snapshot.data();
+    const role = normalizeRole(data.role);
+
+    if (!BUSINESS_OWNER_ROLES.includes(role)) {
+        throw new Error("ليس لديك صلاحية الدخول إلى منصة سِكّة.");
+    }
+
+    return {
+        ...data,
+        uid: user.uid,
+        role,
+        status: data.status || "pending",
+    };
+};
+
+const validateLogin = async (user) => {
+    try {
+        return await getLoginProfile(user);
     } catch (error) {
-        console.warn(`Customer linking to tenant notice (${tenantIdOrSlug}):`, error?.message);
+        await signOut(auth);
+        throw error;
     }
 };
 
@@ -233,114 +302,178 @@ export const registerWithEmail = async ({
     password,
     name,
     phone = "",
-    tenantId = null,
 }) => {
-    const result = await createUserWithEmailAndPassword(auth, email, password);
+    const owner = await getPublicBusinessOwner();
+    const ownerUid = getOwnerUid(owner);
+
+    if (owner && owner.status !== "active") {
+        throw new Error("موقع النشاط غير مفعل حاليًا.");
+    }
+
+    if (owner && !ownerUid) {
+        throw new Error("تعذر تحديد حساب صاحب النشاط.");
+    }
+
+    const result = await createUserWithEmailAndPassword(
+        auth,
+        email,
+        password
+    );
+
     const user = result.user;
 
     try {
-        await updateProfile(user, { displayName: name || "" });
-    } catch (updateErr) {
-        console.warn("Could not update displayName:", updateErr);
-    }
+        await updateProfile(user, {
+            displayName: name || "",
+        });
 
-    let effectiveTenantId = null;
-    try {
-        effectiveTenantId = await getPublicTenantId(tenantId);
-    } catch (tenantErr) {
-        console.warn("Could not resolve tenant during register:", tenantErr);
-    }
+        const profile = owner
+            ? await saveBusinessUserProfile(user, ownerUid, {
+                name,
+                phone,
+                role: "customer",
+            })
+            : await saveOwnerProfile(user, { name, phone });
 
-    const profile = await saveUserProfile(user, {
-        name,
-        phone,
-        tenantId: effectiveTenantId,
-        isNewUser: true,
-    });
-
-    if (effectiveTenantId) {
-        try {
-            await linkTenantCustomer(user, effectiveTenantId);
-        } catch (linkErr) {
-            console.warn("Could not link tenant customer:", linkErr);
-        }
-    }
-
-    try {
         await sendEmailVerification(user);
-    } catch (error) {
-        console.warn("Could not send verification email:", error);
-    }
 
-    return { ...user, profile };
+        return { ...result, profile };
+    } catch (error) {
+        await signOut(auth);
+        throw error;
+    }
 };
 
-export const loginWithEmail = async (email, password, tenantId = null) => {
-    const result = await signInWithEmailAndPassword(auth, email, password);
-    const user = result.user;
+export const loginWithEmail = async (email, password) => {
+    const result = await signInWithEmailAndPassword(
+        auth,
+        email,
+        password
+    );
 
-    try {
-        const userRef = doc(db, USERS_COLLECTION, user.uid);
-        const userSnapshot = await getDoc(userRef);
-        if (userSnapshot.exists()) {
-            await saveUserSearchFields(user.uid, userSnapshot.data());
-        }
-    } catch (error) {
-        console.error("User search fields update error:", error);
-    }
+    const profile = await validateLogin(result.user);
 
-    // Link customer to tenant on login if accessing from merchant site
-    try {
-        const effectiveTenantId = await getPublicTenantId(tenantId);
-        if (effectiveTenantId) {
-            await linkTenantCustomer(user, effectiveTenantId);
-        }
-    } catch (error) {
-        console.warn("Tenant customer link on login warning:", error);
-    }
-
-    return result;
+    return { ...result, profile };
 };
 
-export const signInWithGoogle = async (tenantId = null) => {
+export const signInWithGoogle = async () => {
     const result = await signInWithPopup(auth, googleProvider);
     const user = result.user;
 
-    const effectiveTenantId = await getPublicTenantId(tenantId);
+    try {
+        const platformRole = await getActivePlatformRole(user.uid);
 
-    await saveUserProfile(user, {
-        name: user.displayName || "مستخدم Google",
-        phone: user.phoneNumber || "",
-        tenantId: effectiveTenantId,
-    });
+        if (platformRole) {
+            const snapshot = await getDoc(getRootUserRef(user.uid));
+            const data = snapshot.exists() ? snapshot.data() : {};
 
-    if (effectiveTenantId) {
-        await linkTenantCustomer(user, effectiveTenantId);
+            return {
+                ...result,
+                profile: {
+                    ...data,
+                    uid: user.uid,
+                    role: platformRole,
+                    status: "active",
+                    platformRole,
+                },
+            };
+        }
+
+        const owner = await getPublicBusinessOwner();
+
+        if (owner) {
+            if (owner.status !== "active") {
+                throw new Error("موقع النشاط غير مفعل حاليًا.");
+            }
+
+            const ownerUid = getOwnerUid(owner);
+
+            if (!ownerUid) {
+                throw new Error("تعذر تحديد حساب صاحب النشاط.");
+            }
+
+            const profile = await saveBusinessUserProfile(
+                user,
+                ownerUid,
+                {
+                    name: user.displayName || "مستخدم Google",
+                    phone: user.phoneNumber || "",
+                    role: "customer",
+                }
+            );
+
+            return { ...result, profile };
+        }
+
+        const snapshot = await getDoc(getRootUserRef(user.uid));
+
+        if (!snapshot.exists()) {
+            const profile = await saveOwnerProfile(user, {
+                name: user.displayName || "صاحب نشاط",
+                phone: user.phoneNumber || "",
+            });
+
+            return { ...result, profile };
+        }
+
+        const data = snapshot.data();
+        const role = normalizeRole(data.role);
+
+        if (!BUSINESS_OWNER_ROLES.includes(role)) {
+            throw new Error("ليس لديك صلاحية الدخول إلى منصة سِكّة.");
+        }
+
+        return {
+            ...result,
+            profile: {
+                ...data,
+                uid: user.uid,
+                role,
+                status: data.status || "pending",
+            },
+        };
+    } catch (error) {
+        await signOut(auth);
+        throw error;
     }
-
-    return result;
 };
 
 export const resetPassword = (email) =>
     sendPasswordResetEmail(auth, email);
 
-export const logout = () => signOut(auth);
+export const logout = () =>
+    signOut(auth);
 
-export const changeCurrentUserPassword = async (currentPassword, newPassword) => {
+export const changeCurrentUserPassword = async (
+    currentPassword,
+    newPassword
+) => {
     const user = auth.currentUser;
-    if (!user?.email) throw new Error("No authenticated user found.");
 
-    const credential = EmailAuthProvider.credential(user.email, currentPassword);
+    if (!user?.email) {
+        throw new Error("No authenticated user found.");
+    }
+
+    const credential = EmailAuthProvider.credential(
+        user.email,
+        currentPassword
+    );
+
     await reauthenticateWithCredential(user, credential);
     await updatePassword(user, newPassword);
+
     return true;
 };
 
 export const resendVerificationEmail = async () => {
     const user = auth.currentUser;
-    if (!user) throw new Error("No authenticated user found.");
+
+    if (!user) {
+        throw new Error("No authenticated user found.");
+    }
 
     await sendEmailVerification(user);
+
     return true;
 };
 

@@ -5,41 +5,69 @@ import { useAuth } from "@/context/AuthContext";
 import { FiLock } from "react-icons/fi";
 
 export default function ModuleGuard({ moduleKey, children }) {
-    const { isModuleEnabled, tenantName, tenantId, loadingTenant } = useTenant();
-    const { isPlatformAdmin, isSuperAdmin, loading: authLoading } = useAuth();
+    const {
+        isModuleEnabled,
+        tenantName,
+        tenantId,
+        loadingTenant,
+    } = useTenant();
 
-    // 1. Wait for auth state to finish loading before evaluating permissions
+    const {
+        role,
+        platformRole,
+        isPlatformAdmin,
+        isSuperAdmin,
+        loading: authLoading,
+    } = useAuth();
+
+    const normalizedRole = String(role || "").toLowerCase().trim();
+    const normalizedPlatformRole = String(platformRole || "").toLowerCase().trim();
+
+    const hasPlatformAccess =
+        isPlatformAdmin ||
+        isSuperAdmin ||
+        normalizedRole === "platform_admin" ||
+        normalizedRole === "super_admin" ||
+        normalizedPlatformRole === "platform_admin";
+
+    const renderPage = children || <Outlet />;
+
     if (authLoading) {
         return (
             <div className="min-h-[60vh] flex flex-col items-center justify-center p-6 text-center">
                 <div className="w-10 h-10 border-4 border-primary-color border-t-transparent rounded-full animate-spin mb-3" />
-                <p className="text-gray-400 text-sm">جاري التحقق من الصلاحيات...</p>
+                <p className="text-gray-400 text-sm">
+                    جاري التحقق من الصلاحيات...
+                </p>
             </div>
         );
     }
 
-    // 2. Platform Admins and Super Admins ALWAYS have full access to all platform modules
-    if (isPlatformAdmin || isSuperAdmin) {
-        return children || <Outlet />;
+    // Platform administrators are not restricted by tenant subscription modules.
+    if (hasPlatformAccess) {
+        return renderPage;
     }
 
-    // 3. In platform-level mode (no tenant specified), modules are not locked by merchant plan limits
-    if (!tenantId) {
-        return children || <Outlet />;
-    }
-
-    // 4. Wait for tenant data to load before deciding to lock
+    // Wait for the active tenant to load before checking its subscription.
     if (loadingTenant) {
         return (
             <div className="min-h-[60vh] flex flex-col items-center justify-center p-6 text-center">
                 <div className="w-10 h-10 border-4 border-primary-color border-t-transparent rounded-full animate-spin mb-3" />
-                <p className="text-gray-400 text-sm">جاري التحقق من باقة النشاط...</p>
+                <p className="text-gray-400 text-sm">
+                    جاري التحقق من باقة النشاط...
+                </p>
             </div>
         );
     }
 
-    // 5. Merchant plan restriction
-    if (!moduleKey || !isModuleEnabled(moduleKey)) {
+    // Pages outside a tenant subscription scope are not restricted by this guard.
+    if (!tenantId) {
+        return renderPage;
+    }
+
+    const moduleEnabled = moduleKey && isModuleEnabled(moduleKey);
+
+    if (!moduleEnabled) {
         return (
             <div className="min-h-[60vh] flex flex-col items-center justify-center p-6 text-center">
                 <div className="max-w-md p-8 rounded-2xl bg-card border border-border shadow-sm">
@@ -70,5 +98,5 @@ export default function ModuleGuard({ moduleKey, children }) {
         );
     }
 
-    return children || <Outlet />;
+    return renderPage;
 }

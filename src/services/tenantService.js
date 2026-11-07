@@ -13,8 +13,15 @@ import {
 } from "firebase/firestore";
 import { db } from "../config/firebase";
 
-export const TENANTS_COLLECTION = "tenants";
-export const DEFAULT_TENANT_ID = import.meta.env.VITE_TENANT_ID || "";
+export const USERS_COLLECTION = "users";
+
+export const BUSINESS_USER_ROLES = [
+    "admin",
+    "staff",
+    "worker",
+    "driver",
+    "customer",
+];
 
 export const DEFAULT_MODULES = {
     editLanding: true,
@@ -25,48 +32,29 @@ export const DEFAULT_MODULES = {
     customDomain: false,
 };
 
-export const createDefaultTenantData = (id, name, slug) => {
-    const now = new Date();
-    const expiry = new Date();
-    expiry.setMonth(expiry.getMonth() + 1);
+const normalizeSlug = (value) =>
+    typeof value === "string" ? value.trim().toLowerCase() : "";
 
-    return {
-        id: id || slug,
-        slug: slug || id,
-        name: name || "متجر جديد",
-        role: "tenant_owner",
-        status: "active",
-        domain: "",
-        ownerEmail: "",
-        ownerPhone: "",
-        subscription: {
-            plan: "pro",
-            billingCycle: "monthly",
-            startDate: now.toISOString(),
-            endDate: expiry.toISOString(),
-            price: 2500,
-            currency: "EGP",
-            autoRenew: true,
-            lastReminderSentAt: null,
-            status: "active",
-        },
-        modules: { ...DEFAULT_MODULES },
-        cloudinary: {
-            cloudName: import.meta.env.VITE_CLOUDINARY_CLOUD_NAME || "",
-            uploadPreset: import.meta.env.VITE_CLOUDINARY_UPLOAD_PRESET || "",
-        },
-        createdAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-    };
+const normalizeDomain = (value) => {
+    if (typeof value !== "string") return "";
+
+    return value
+        .trim()
+        .toLowerCase()
+        .replace(/^https?:\/\//, "")
+        .replace(/^www\./, "")
+        .split("/")[0]
+        .split(":")[0];
 };
 
-const normalizeTenant = (tenantDoc) => {
-    const data = tenantDoc.data();
+const normalizeBusinessOwner = (snapshot) => {
+    if (!snapshot?.exists()) return null;
+
+    const data = snapshot.data();
 
     return {
         ...data,
-        id: tenantDoc.id,
-        modules: { ...(data.modules || {}) },
+        ownerUid: snapshot.id,
         subscription: data.subscription || null,
     };
 };
@@ -88,276 +76,466 @@ const getDateValue = (value) => {
     return Number.isNaN(date.getTime()) ? null : date;
 };
 
-export const getTenant = async (tenantId) => {
-    if (!tenantId) return null;
+const getOwnerRef = (ownerUid) => {
+    if (!ownerUid || typeof ownerUid !== "string") {
+        throw new Error("معرّف صاحب النشاط غير صحيح.");
+    }
+
+    return doc(db, USERS_COLLECTION, ownerUid);
+};
+
+const getOwnerUsersRef = (ownerUid) =>
+    collection(db, USERS_COLLECTION, ownerUid, "users");
+
+const getOwnerModulesRef = (ownerUid) =>
+    collection(db, USERS_COLLECTION, ownerUid, "modules");
+
+const getOwnerSettingsRef = (ownerUid) =>
+    collection(db, USERS_COLLECTION, ownerUid, "settings");
+
+export const createDefaultBusinessOwnerData = ({
+    name = "",
+    email = "",
+    phone = "",
+    slug = "",
+    domain = "",
+} = {}) => ({
+    name: name.trim(),
+    email: email.trim().toLowerCase(),
+    phone: phone.trim(),
+    role: "business_owner",
+    status: "pending",
+    slug: normalizeSlug(slug),
+    domain: normalizeDomain(domain),
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+});
+
+export const getBusinessOwner = async (ownerUid) => {
+    if (!ownerUid) return null;
 
     try {
-        const tenantRef = doc(db, TENANTS_COLLECTION, tenantId);
-        const snap = await getDoc(tenantRef);
+        const snapshot = await getDoc(getOwnerRef(ownerUid));
 
-        if (!snap.exists()) return null;
+        if (!snapshot.exists()) return null;
 
-        return normalizeTenant(snap);
+        const owner = normalizeBusinessOwner(snapshot);
+
+        return owner.role === "business_owner" ? owner : null;
     } catch (error) {
-        console.error(`Error fetching tenant [${tenantId}]:`, error);
+        console.error("Error fetching business owner:", error);
         throw error;
     }
 };
 
-/**
- * Resolves a tenant by either document ID, slug, or custom domain.
- */
-export const resolveTenant = async (identifier) => {
+export const getBusinessOwnerBySlug = async (slug) => {
+    const normalizedSlug = normalizeSlug(slug);
+    if (!normalizedSlug) return null;
+
+    try {
+        const ownersRef = collection(db, USERS_COLLECTION);
+        const ownerQuery = query(
+            ownersRef,
+            where("slug", "==", normalizedSlug)
+        );
+        const snapshot = await getDocs(ownerQuery);
+
+        const ownerDoc = snapshot.docs.find(
+            (item) => item.data().role === "business_owner"
+        );
+
+        return ownerDoc ? normalizeBusinessOwner(ownerDoc) : null;
+    } catch (error) {
+        console.error("Error resolving business owner by slug:", error);
+        throw error;
+    }
+};
+
+export const getBusinessOwnerByDomain = async (domain) => {
+    const normalizedDomain = normalizeDomain(domain);
+    if (!normalizedDomain) return null;
+
+    try {
+        const ownersRef = collection(db, USERS_COLLECTION);
+        const ownerQuery = query(
+            ownersRef,
+            where("domain", "==", normalizedDomain)
+        );
+        const snapshot = await getDocs(ownerQuery);
+
+        const ownerDoc = snapshot.docs.find(
+            (item) => item.data().role === "business_owner"
+        );
+
+        return ownerDoc ? normalizeBusinessOwner(ownerDoc) : null;
+    } catch (error) {
+        console.error("Error resolving business owner by domain:", error);
+        throw error;
+    }
+};
+
+export const resolveBusinessOwner = async (identifier) => {
     if (!identifier || typeof identifier !== "string") return null;
 
-    const trimmed = identifier.trim();
-    if (!trimmed) return null;
+    const value = identifier.trim().toLowerCase();
+    if (!value) return null;
 
-    try {
-        // 1. Direct document ID lookup
-        const docRef = doc(db, TENANTS_COLLECTION, trimmed);
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
-            return normalizeTenant(docSnap);
+    const isDomain =
+        value.includes(".") ||
+        value.includes("://");
+
+    return isDomain
+        ? getBusinessOwnerByDomain(value)
+        : getBusinessOwnerBySlug(value);
+};
+
+export const createBusinessOwner = async (ownerUid, ownerData) => {
+    if (!ownerUid || !ownerData || typeof ownerData !== "object") {
+        throw new Error("بيانات صاحب النشاط غير مكتملة.");
+    }
+
+    const ownerRef = getOwnerRef(ownerUid);
+    const existing = await getDoc(ownerRef);
+
+    if (existing.exists()) {
+        throw new Error("يوجد حساب مسجل بالفعل بهذا المعرّف.");
+    }
+
+    const data = createDefaultBusinessOwnerData(ownerData);
+
+    await setDoc(ownerRef, {
+        ...data,
+        ...ownerData,
+        role: "business_owner",
+        status: "pending",
+        slug: normalizeSlug(ownerData.slug),
+        domain: normalizeDomain(ownerData.domain),
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+    });
+
+    return true;
+};
+
+export const updateBusinessOwner = async (ownerUid, data) => {
+    if (!ownerUid || !data || typeof data !== "object") {
+        throw new Error("بيانات التحديث غير صحيحة.");
+    }
+
+    const allowedFields = [
+        "name",
+        "email",
+        "phone",
+        "slug",
+        "domain",
+        "imageUrl",
+        "address",
+        "description",
+        "subscription",
+    ];
+
+    const updates = {};
+
+    allowedFields.forEach((field) => {
+        if (data[field] !== undefined) {
+            updates[field] = data[field];
         }
+    });
 
-        // 2. Query by slug
-        const tenantsRef = collection(db, TENANTS_COLLECTION);
-        const slugQuery = query(tenantsRef, where("slug", "==", trimmed.toLowerCase()));
-        const slugSnap = await getDocs(slugQuery);
-        if (!slugSnap.empty) {
-            return normalizeTenant(slugSnap.docs[0]);
-        }
-
-        // 3. Query by domain
-        const domainQuery = query(tenantsRef, where("domain", "==", trimmed.toLowerCase()));
-        const domainSnap = await getDocs(domainQuery);
-        if (!domainSnap.empty) {
-            return normalizeTenant(domainSnap.docs[0]);
-        }
-
-        return null;
-    } catch (error) {
-        console.error(`Error resolving tenant [${identifier}]:`, error);
-        return null;
+    if (updates.slug !== undefined) {
+        updates.slug = normalizeSlug(updates.slug);
     }
-};
 
-export const getTenantBySlug = async (slug) => {
-    if (!slug) return null;
-    return resolveTenant(slug);
-};
-
-export const getTenantByDomain = async (domain) => {
-    if (!domain) return null;
-    return resolveTenant(domain);
-};
-
-/**
- * Subcollection: /tenants/{tenantId}/customers
- */
-export const getTenantCustomers = async (tenantId) => {
-    if (!tenantId) return [];
-    try {
-        const customersRef = collection(db, TENANTS_COLLECTION, tenantId, "customers");
-        const snap = await getDocs(customersRef);
-        return snap.docs.map((d) => ({ id: d.id, uid: d.id, ...d.data() }));
-    } catch (error) {
-        console.error(`Error fetching customers for tenant [${tenantId}]:`, error);
-        return [];
+    if (updates.domain !== undefined) {
+        updates.domain = normalizeDomain(updates.domain);
     }
+
+    if (Object.keys(updates).length === 0) return false;
+
+    updates.updatedAt = serverTimestamp();
+
+    await updateDoc(getOwnerRef(ownerUid), updates);
+
+    return true;
 };
 
-/**
- * Subcollection: /tenants/{tenantId}/members
- */
-export const getTenantMembers = async (tenantId) => {
-    if (!tenantId) return [];
+export const getAllBusinessOwners = async () => {
     try {
-        const membersRef = collection(db, TENANTS_COLLECTION, tenantId, "members");
-        const snap = await getDocs(membersRef);
-        return snap.docs.map((d) => ({ id: d.id, uid: d.id, ...d.data() }));
-    } catch (error) {
-        console.error(`Error fetching members for tenant [${tenantId}]:`, error);
-        return [];
-    }
-};
+        const ownersRef = collection(db, USERS_COLLECTION);
+        const ownersQuery = query(
+            ownersRef,
+            where("role", "==", "business_owner")
+        );
+        const snapshot = await getDocs(ownersQuery);
 
-export const addTenantCustomer = async (tenantId, customerData) => {
-    if (!tenantId || !customerData?.uid) return false;
-    try {
-        const customerRef = doc(db, TENANTS_COLLECTION, tenantId, "customers", customerData.uid);
-        await setDoc(customerRef, {
-            ...customerData,
-            role: customerData.role !== undefined ? customerData.role : "",
-            status: customerData.status || "active",
-            createdAt: customerData.createdAt || serverTimestamp(),
-            updatedAt: serverTimestamp(),
-        }, { merge: true });
-        return true;
+        return snapshot.docs.map(normalizeBusinessOwner);
     } catch (error) {
-        console.error(`Error adding customer to tenant [${tenantId}]:`, error);
-        return false;
-    }
-};
-
-export const addTenantMember = async (tenantId, memberData) => {
-    if (!tenantId || !memberData?.uid) return false;
-    try {
-        const memberRef = doc(db, TENANTS_COLLECTION, tenantId, "members", memberData.uid);
-        await setDoc(memberRef, {
-            ...memberData,
-            role: memberData.role || "tenant_staf",
-            status: memberData.status || "active",
-            createdAt: memberData.createdAt || serverTimestamp(),
-            updatedAt: serverTimestamp(),
-        }, { merge: true });
-        return true;
-    } catch (error) {
-        console.error(`Error adding member to tenant [${tenantId}]:`, error);
-        return false;
-    }
-};
-
-export const removeTenantCustomer = async (tenantId, customerId) => {
-    if (!tenantId || !customerId) return false;
-    try {
-        await deleteDoc(doc(db, TENANTS_COLLECTION, tenantId, "customers", customerId));
-        return true;
-    } catch (error) {
-        console.error(`Error removing customer [${customerId}] from tenant [${tenantId}]:`, error);
-        return false;
-    }
-};
-
-export const removeTenantMember = async (tenantId, memberId) => {
-    if (!tenantId || !memberId) return false;
-    try {
-        await deleteDoc(doc(db, TENANTS_COLLECTION, tenantId, "members", memberId));
-        return true;
-    } catch (error) {
-        console.error(`Error removing member [${memberId}] from tenant [${tenantId}]:`, error);
-        return false;
-    }
-};
-
-export const getAllTenants = async () => {
-    try {
-        const tenantsRef = collection(db, TENANTS_COLLECTION);
-        const snap = await getDocs(tenantsRef);
-
-        return snap.docs.map(normalizeTenant);
-    } catch (error) {
-        console.error("Error fetching all tenants:", error);
+        console.error("Error fetching business owners:", error);
         throw error;
     }
 };
 
-export const createTenant = async (tenantId, tenantData) => {
-    const id = tenantId || tenantData?.slug || tenantData?.id;
+export const updateBusinessOwnerStatus = async (ownerUid, status) => {
+    const allowedStatuses = ["pending", "active", "suspended", "blocked"];
 
-    if (!id || !tenantData || typeof tenantData !== "object") {
-        throw new Error("بيانات التاجر غير مكتملة.");
+    if (!ownerUid || !allowedStatuses.includes(status)) {
+        throw new Error("معرّف صاحب النشاط أو الحالة غير صحيحة.");
     }
 
+    await updateDoc(getOwnerRef(ownerUid), {
+        status,
+        updatedAt: serverTimestamp(),
+    });
+
+    return true;
+};
+
+export const getBusinessOwnerUsers = async (
+    ownerUid,
+    { role, status } = {}
+) => {
+    if (!ownerUid) return [];
+
     try {
-        const tenantRef = doc(db, TENANTS_COLLECTION, id);
-        const existingTenant = await getDoc(tenantRef);
+        const snapshot = await getDocs(getOwnerUsersRef(ownerUid));
 
-        if (existingTenant.exists()) {
-            throw new Error("يوجد تاجر بهذا المعرّف بالفعل.");
+        return snapshot.docs
+            .map((item) => ({
+                ...item.data(),
+                id: item.id,
+                uid: item.id,
+                ownerUid,
+            }))
+            .filter((item) => !role || item.role === role)
+            .filter((item) => !status || item.status === status);
+    } catch (error) {
+        console.error("Error fetching business users:", error);
+        throw error;
+    }
+};
+
+export const getBusinessOwnerUser = async (ownerUid, userUid) => {
+    if (!ownerUid || !userUid) return null;
+
+    try {
+        const userRef = doc(
+            db,
+            USERS_COLLECTION,
+            ownerUid,
+            "users",
+            userUid
+        );
+        const snapshot = await getDoc(userRef);
+
+        if (!snapshot.exists()) return null;
+
+        return {
+            ...snapshot.data(),
+            id: snapshot.id,
+            uid: snapshot.id,
+            ownerUid,
+        };
+    } catch (error) {
+        console.error("Error fetching business user:", error);
+        throw error;
+    }
+};
+
+export const addBusinessOwnerUser = async (
+    ownerUid,
+    userData
+) => {
+    if (!ownerUid || !userData?.uid) {
+        throw new Error("بيانات المستخدم غير مكتملة.");
+    }
+
+    if (!BUSINESS_USER_ROLES.includes(userData.role)) {
+        throw new Error("نوع المستخدم غير مسموح به.");
+    }
+
+    const userRef = doc(
+        db,
+        USERS_COLLECTION,
+        ownerUid,
+        "users",
+        userData.uid
+    );
+
+    const existing = await getDoc(userRef);
+
+    if (existing.exists()) {
+        throw new Error("هذا المستخدم مسجل بالفعل لدى هذا النشاط.");
+    }
+
+    await setDoc(userRef, {
+        ...userData,
+        uid: userData.uid,
+        role: userData.role,
+        status: userData.status || "active",
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+    });
+
+    return true;
+};
+
+export const updateBusinessOwnerUser = async (
+    ownerUid,
+    userUid,
+    updates
+) => {
+    if (!ownerUid || !userUid || !updates) {
+        throw new Error("بيانات التحديث غير مكتملة.");
+    }
+
+    const allowedFields = [
+        "name",
+        "phone",
+        "email",
+        "imageUrl",
+        "role",
+        "status",
+        "permissions",
+    ];
+
+    const data = {};
+
+    allowedFields.forEach((field) => {
+        if (updates[field] !== undefined) {
+            data[field] = updates[field];
         }
+    });
 
-        await setDoc(tenantRef, {
-            ...tenantData,
-            id,
-            updatedAt: serverTimestamp(),
+    if (
+        data.role !== undefined &&
+        !BUSINESS_USER_ROLES.includes(data.role)
+    ) {
+        throw new Error("نوع المستخدم غير مسموح به.");
+    }
+
+    if (
+        data.status !== undefined &&
+        !["active", "blocked", "suspended"].includes(data.status)
+    ) {
+        throw new Error("حالة المستخدم غير صحيحة.");
+    }
+
+    if (Object.keys(data).length === 0) return false;
+
+    data.updatedAt = serverTimestamp();
+
+    const userRef = doc(
+        db,
+        USERS_COLLECTION,
+        ownerUid,
+        "users",
+        userUid
+    );
+
+    await updateDoc(userRef, data);
+
+    return true;
+};
+
+export const removeBusinessOwnerUser = async (ownerUid, userUid) => {
+    if (!ownerUid || !userUid) return false;
+
+    await deleteDoc(
+        doc(db, USERS_COLLECTION, ownerUid, "users", userUid)
+    );
+
+    return true;
+};
+
+export const getBusinessOwnerModules = async (ownerUid) => {
+    if (!ownerUid) return { ...DEFAULT_MODULES };
+
+    try {
+        const snapshot = await getDocs(getOwnerModulesRef(ownerUid));
+
+        const modules = { ...DEFAULT_MODULES };
+
+        snapshot.docs.forEach((item) => {
+            if (Object.hasOwn(DEFAULT_MODULES, item.id)) {
+                modules[item.id] = item.data().enabled === true;
+            }
         });
 
-        return true;
+        return modules;
     } catch (error) {
-        console.error(`Error creating tenant [${id}]:`, error);
+        console.error("Error fetching business modules:", error);
         throw error;
     }
 };
 
-export const saveTenant = async (tenantId, tenantData) => {
-    return createTenant(tenantId, tenantData);
-};
-
-export const updateTenantModules = async (tenantId, modules) => {
-    if (!tenantId || !modules || typeof modules !== "object") {
-        throw new Error("معرّف التاجر أو بيانات الموديولات غير صحيحة.");
+export const updateBusinessOwnerModules = async (
+    ownerUid,
+    modules
+) => {
+    if (!ownerUid || !modules || typeof modules !== "object") {
+        throw new Error("بيانات الموديولات غير صحيحة.");
     }
 
-    try {
-        const tenantRef = doc(db, TENANTS_COLLECTION, tenantId);
-        const tenantSnap = await getDoc(tenantRef);
+    const entries = Object.entries(modules);
 
-        if (!tenantSnap.exists()) {
-            throw new Error("التاجر غير موجود.");
+    if (!entries.length) return true;
+
+    for (const [moduleKey, enabled] of entries) {
+        if (!Object.hasOwn(DEFAULT_MODULES, moduleKey)) {
+            throw new Error(`الموديول ${moduleKey} غير معتمد.`);
         }
 
-        await updateDoc(tenantRef, {
-            modules: { ...modules },
-            updatedAt: serverTimestamp(),
-        });
-
-        return true;
-    } catch (error) {
-        console.error(`Error updating tenant modules [${tenantId}]:`, error);
-        throw error;
+        if (typeof enabled !== "boolean") {
+            throw new Error(`قيمة الموديول ${moduleKey} غير صحيحة.`);
+        }
     }
+
+    await Promise.all(
+        entries.map(([moduleKey, enabled]) => {
+            const moduleRef = doc(
+                db,
+                USERS_COLLECTION,
+                ownerUid,
+                "modules",
+                moduleKey
+            );
+
+            return setDoc(
+                moduleRef,
+                {
+                    enabled,
+                    updatedAt: serverTimestamp(),
+                },
+                { merge: true }
+            );
+        })
+    );
+
+    return true;
 };
 
-export const updateTenantSubscription = async (tenantId, subscription) => {
-    if (!tenantId || !subscription || typeof subscription !== "object") {
-        throw new Error("معرّف التاجر أو بيانات الاشتراك غير صحيحة.");
-    }
-
-    try {
-        const tenantRef = doc(db, TENANTS_COLLECTION, tenantId);
-        const tenantSnap = await getDoc(tenantRef);
-
-        if (!tenantSnap.exists()) {
-            throw new Error("التاجر غير موجود.");
-        }
-
-        await updateDoc(tenantRef, {
-            subscription: { ...subscription },
-            updatedAt: serverTimestamp(),
-        });
-
-        return true;
-    } catch (error) {
-        console.error(`Error updating tenant subscription [${tenantId}]:`, error);
-        throw error;
-    }
+export const getBusinessOwnerSubscription = async (ownerUid) => {
+    const owner = await getBusinessOwner(ownerUid);
+    return owner?.subscription || null;
 };
 
-export const updateTenantStatus = async (tenantId, status) => {
-    if (!tenantId || !status) {
-        throw new Error("معرّف التاجر أو الحالة غير صحيحة.");
+export const updateBusinessOwnerSubscription = async (
+    ownerUid,
+    subscription
+) => {
+    if (!ownerUid || !subscription || typeof subscription !== "object") {
+        throw new Error("بيانات الاشتراك غير صحيحة.");
     }
 
-    try {
-        const tenantRef = doc(db, TENANTS_COLLECTION, tenantId);
-        const tenantSnap = await getDoc(tenantRef);
-
-        if (!tenantSnap.exists()) {
-            throw new Error("التاجر غير موجود.");
-        }
-
-        await updateDoc(tenantRef, {
-            status,
+    await updateDoc(getOwnerRef(ownerUid), {
+        subscription: {
+            ...subscription,
             updatedAt: serverTimestamp(),
-        });
+        },
+        updatedAt: serverTimestamp(),
+    });
 
-        return true;
-    } catch (error) {
-        console.error(`Error updating tenant status [${tenantId}]:`, error);
-        throw error;
-    }
+    return true;
 };
 
 export const calculateDaysRemaining = (endDate) => {
@@ -365,192 +543,120 @@ export const calculateDaysRemaining = (endDate) => {
 
     if (!end) return null;
 
-    const now = new Date();
-    const diffTime = end.getTime() - now.getTime();
+    const diffTime = end.getTime() - Date.now();
 
     return Math.ceil(diffTime / (1000 * 60 * 60 * 24));
 };
 
-export const checkExpiringSubscriptions = (tenants = []) => {
-    return tenants.filter((tenant) => {
-        const days = calculateDaysRemaining(tenant.subscription?.endDate);
+export const checkExpiringSubscriptions = (owners = []) =>
+    owners.filter((owner) => {
+        const days = calculateDaysRemaining(
+            owner.subscription?.endDate
+        );
 
         return (
-            tenant.status === "active" &&
-            tenant.subscription?.status === "active" &&
+            owner.status === "active" &&
+            owner.subscription?.status === "active" &&
             days !== null &&
             days >= 0 &&
             days <= 3
         );
     });
+
+export const recordPaymentReminderSent = async (ownerUid) => {
+    if (!ownerUid) return false;
+
+    await updateDoc(getOwnerRef(ownerUid), {
+        "subscription.lastReminderSentAt": serverTimestamp(),
+        updatedAt: serverTimestamp(),
+    });
+
+    return true;
 };
 
-export const recordPaymentReminderSent = async (tenantId) => {
-    if (!tenantId) return false;
+export const getBusinessOwnerLanding = async (ownerUid) => {
+    if (!ownerUid) return null;
 
-    try {
-        const tenantRef = doc(db, TENANTS_COLLECTION, tenantId);
-        const tenantSnap = await getDoc(tenantRef);
+    const landingRef = doc(
+        db,
+        USERS_COLLECTION,
+        ownerUid,
+        "settings",
+        "landingPage"
+    );
 
-        if (!tenantSnap.exists()) {
-            throw new Error("التاجر غير موجود.");
-        }
+    const snapshot = await getDoc(landingRef);
 
-        await updateDoc(tenantRef, {
-            "subscription.lastReminderSentAt": new Date().toISOString(),
+    return snapshot.exists() ? snapshot.data() : null;
+};
+
+export const saveBusinessOwnerLanding = async (
+    ownerUid,
+    landingData
+) => {
+    if (!ownerUid || !landingData || typeof landingData !== "object") {
+        throw new Error("بيانات صفحة الموقع غير صحيحة.");
+    }
+
+    const landingRef = doc(
+        db,
+        USERS_COLLECTION,
+        ownerUid,
+        "settings",
+        "landingPage"
+    );
+
+    await setDoc(
+        landingRef,
+        {
+            ...landingData,
             updatedAt: serverTimestamp(),
-        });
+        },
+        { merge: true }
+    );
 
-        return true;
-    } catch (error) {
-        console.error(`Error recording payment reminder [${tenantId}]:`, error);
-        return false;
-    }
+    return true;
 };
 
-export const diagnoseTenant = async (tenantId) => {
-    const report = {
-        tenantId,
-        existsInFirestore: false,
-        landingConfigured: false,
-        modulesConfigured: false,
-        subscriptionStatus: "unknown",
-        daysRemaining: null,
-        issues: [],
-    };
-
-    if (!tenantId) {
-        report.issues.push("لم يتم تحديد معرّف التاجر.");
-        return report;
-    }
+export const initializeBusinessOwnerLanding = async (
+    ownerUid,
+    ownerName = ""
+) => {
+    if (!ownerUid) return false;
 
     try {
-        const tenantRef = doc(db, TENANTS_COLLECTION, tenantId);
-        const tenantSnap = await getDoc(tenantRef);
-
-        if (!tenantSnap.exists()) {
-            report.issues.push(
-                "مستند التاجر غير موجود في Firestore. لم يتم إنشاء بيانات تلقائية."
-            );
-            return report;
-        }
-
-        const data = tenantSnap.data();
-        const subscription = data.subscription || null;
-        const daysRemaining = calculateDaysRemaining(subscription?.endDate);
-
-        report.existsInFirestore = true;
-        report.modulesConfigured =
-            !!data.modules &&
-            typeof data.modules === "object" &&
-            Object.keys(data.modules).length > 0;
-        report.daysRemaining = daysRemaining;
-
-        if (!subscription) {
-            report.subscriptionStatus = "unknown";
-            report.issues.push("بيانات الاشتراك غير موجودة.");
-        } else if (subscription.status) {
-            report.subscriptionStatus = subscription.status;
-        } else if (daysRemaining === null) {
-            report.subscriptionStatus = "unknown";
-            report.issues.push("تاريخ انتهاء الاشتراك غير موجود أو غير صالح.");
-        } else {
-            report.subscriptionStatus =
-                daysRemaining > 0 ? "active" : "expired";
-        }
-
-        if (daysRemaining !== null) {
-            if (daysRemaining >= 0 && daysRemaining <= 3) {
-                report.issues.push("الاشتراك ينتهي خلال 3 أيام أو أقل.");
-            } else if (daysRemaining < 0) {
-                report.issues.push("تاريخ انتهاء الاشتراك قد مضى.");
-            }
-        }
-
-        if (!report.modulesConfigured) {
-            report.issues.push("بيانات الموديولات غير موجودة أو غير مكتملة.");
-        }
-
         const landingRef = doc(
             db,
-            TENANTS_COLLECTION,
-            tenantId,
-            "config",
-            "landing"
+            USERS_COLLECTION,
+            ownerUid,
+            "settings",
+            "landingPage"
         );
-        const landingSnap = await getDoc(landingRef);
 
-        report.landingConfigured = landingSnap.exists();
+        const existing = await getDoc(landingRef);
 
-        if (!report.landingConfigured) {
-            report.issues.push(
-                "لم يتم ضبط صفحة لاندينج مخصصة لهذا التاجر بعد."
-            );
-        }
-    } catch (error) {
-        console.error(`Error diagnosing tenant [${tenantId}]:`, error);
-        report.issues.push(`خطأ أثناء الفحص: ${error.message}`);
-    }
+        if (existing.exists()) return true;
 
-    return report;
-};
+        const displayName = ownerName || "متجر سِكّة لتأجير السيارات";
 
-export const initializeTenantLanding = async (
-    tenantId,
-    tenantName = ""
-) => {
-    if (!tenantId) return false;
-
-    try {
-        const tenantRef = doc(db, TENANTS_COLLECTION, tenantId);
-        const tenantSnap = await getDoc(tenantRef);
-
-        if (!tenantSnap.exists()) {
-            console.error(
-                `Cannot initialize landing: tenant [${tenantId}] does not exist.`
-            );
-            return false;
-        }
-
-        const landingDocRef = doc(
-            db,
-            TENANTS_COLLECTION,
-            tenantId,
-            "config",
-            "landing"
-        );
-        const existingSnap = await getDoc(landingDocRef);
-
-        if (existingSnap.exists()) return true;
-
-        const displayName =
-            tenantName ||
-            tenantSnap.data()?.name ||
-            "متجر سِكّة لتأجير السيارات";
-
-        await setDoc(landingDocRef, {
+        await setDoc(landingRef, {
             hero: {
                 ar: {
                     title: `أهلاً بكم في ${displayName}`,
-                    subtitle:
-                        "خدمات ليموزين وتأجير سيارات فاخرة على مدار الساعة.",
-                    description:
-                        "نقدم لكم تجربة نقل مميزة تجمع بين الراحة، الرفاهية والأمان مع سائقين محترفين وأحدث أسطول سيارات.",
+                    subtitle: "خدمات ليموزين وتأجير سيارات فاخرة على مدار الساعة.",
+                    description: "نقدم لكم تجربة نقل مميزة تجمع بين الراحة والرفاهية والأمان.",
                     buttonText: "احجز رحلتك الآن",
                     buttonLink: "#booking",
                 },
                 en: {
                     title: `Welcome to ${displayName}`,
-                    subtitle:
-                        "Premium limousine and car rental services around the clock.",
-                    description:
-                        "Experience ultimate luxury, safety and comfort with professional drivers and high-end fleet.",
+                    subtitle: "Premium limousine and car rental services.",
+                    description: "Experience comfort, luxury and safety.",
                     buttonText: "Book Your Ride",
                     buttonLink: "#booking",
                 },
                 image: {
-                    imageUrl:
-                        "https://images.unsplash.com/photo-1618843479313-40f8afb4b4d8?auto=format&fit=crop&w=1400&q=90",
+                    imageUrl: "https://images.unsplash.com/photo-1618843479313-40f8afb4b4d8?auto=format&fit=crop&w=1400&q=90",
                     publicId: "",
                     alt: displayName,
                 },
@@ -559,14 +665,12 @@ export const initializeTenantLanding = async (
                 ar: {
                     eyebrow: "خدماتنا المميزة",
                     title: "خيارات تنقل مصممة لأجلك",
-                    description:
-                        "مجموعة متكاملة من الخدمات الفاخرة لتلبية كافة احتياجاتك اليومية والخاصة.",
+                    description: "مجموعة متكاملة من الخدمات لتلبية احتياجاتك.",
                 },
                 en: {
                     eyebrow: "Our Services",
                     title: "Transportation tailored for you",
-                    description:
-                        "A comprehensive range of luxury services to satisfy all your travel needs.",
+                    description: "A range of services designed around your needs.",
                 },
                 cards: {
                     "service-1": {
@@ -574,13 +678,11 @@ export const initializeTenantLanding = async (
                         icon: "car",
                         ar: {
                             title: "تأجير سيارات فاخرة",
-                            description:
-                                "أحدث طرازات السيارات الفاخرة للمناسبات ورجال الأعمال.",
+                            description: "أحدث طرازات السيارات للمناسبات ورجال الأعمال.",
                         },
                         en: {
                             title: "Luxury Car Rental",
-                            description:
-                                "The newest luxury car models for business and events.",
+                            description: "Modern luxury cars for business and events.",
                         },
                     },
                     "service-2": {
@@ -588,13 +690,11 @@ export const initializeTenantLanding = async (
                         icon: "driver",
                         ar: {
                             title: "توصيل مطارات وسياحة",
-                            description:
-                                "خدمة استقبال وتوصيل من وإلى جميع المطارات بأعلى مستوى.",
+                            description: "خدمات استقبال وتوصيل باحترافية.",
                         },
                         en: {
                             title: "Airport Transfers",
-                            description:
-                                "Meet and greet airport transfers with utmost punctuality.",
+                            description: "Professional airport pickup and transfers.",
                         },
                     },
                 },
@@ -607,75 +707,124 @@ export const initializeTenantLanding = async (
 
         return true;
     } catch (error) {
-        console.error(
-            `Error initializing landing for tenant [${tenantId}]:`,
-            error
-        );
+        console.error("Error initializing business landing:", error);
         return false;
     }
 };
 
-export const autoRepairTenant = async (tenantId) => {
+export const diagnoseBusinessOwner = async (ownerUid) => {
+    const report = {
+        ownerUid,
+        exists: false,
+        landingConfigured: false,
+        modulesConfigured: false,
+        subscriptionStatus: "unknown",
+        daysRemaining: null,
+        issues: [],
+    };
+
+    if (!ownerUid) {
+        report.issues.push("لم يتم تحديد صاحب النشاط.");
+        return report;
+    }
+
+    try {
+        const owner = await getBusinessOwner(ownerUid);
+
+        if (!owner) {
+            report.issues.push("حساب صاحب النشاط غير موجود.");
+            return report;
+        }
+
+        report.exists = true;
+
+        const modules = await getBusinessOwnerModules(ownerUid);
+        report.modulesConfigured = Object.keys(modules).length > 0;
+
+        if (!report.modulesConfigured) {
+            report.issues.push("لم يتم إعداد موديولات النشاط.");
+        }
+
+        const subscription = owner.subscription || null;
+        const daysRemaining = calculateDaysRemaining(subscription?.endDate);
+
+        report.daysRemaining = daysRemaining;
+
+        if (!subscription) {
+            report.issues.push("بيانات الاشتراك غير موجودة.");
+        } else {
+            report.subscriptionStatus = subscription.status || "unknown";
+        }
+
+        if (daysRemaining !== null && daysRemaining <= 3) {
+            report.issues.push(
+                daysRemaining < 0
+                    ? "انتهى الاشتراك."
+                    : "الاشتراك ينتهي خلال 3 أيام أو أقل."
+            );
+        }
+
+        const landing = await getBusinessOwnerLanding(ownerUid);
+        report.landingConfigured = Boolean(landing);
+
+        if (!report.landingConfigured) {
+            report.issues.push("لم يتم إعداد صفحة الموقع.");
+        }
+    } catch (error) {
+        report.issues.push(`خطأ أثناء الفحص: ${error.message}`);
+    }
+
+    return report;
+};
+
+export const autoRepairBusinessOwner = async (ownerUid) => {
     const repairs = [];
 
-    if (!tenantId) {
+    if (!ownerUid) {
         return {
             success: false,
-            error: "لم يتم تحديد معرّف التاجر.",
+            error: "لم يتم تحديد صاحب النشاط.",
             repairs,
         };
     }
 
     try {
-        const tenantRef = doc(db, TENANTS_COLLECTION, tenantId);
-        const tenantSnap = await getDoc(tenantRef);
+        const owner = await getBusinessOwner(ownerUid);
 
-        if (!tenantSnap.exists()) {
+        if (!owner) {
             return {
                 success: false,
-                error: "التاجر غير موجود. أنشئ التاجر أولاً من لوحة المنصة.",
+                error: "صاحب النشاط غير موجود.",
                 repairs,
             };
         }
 
-        const tenantData = tenantSnap.data();
+        const landing = await getBusinessOwnerLanding(ownerUid);
 
-        const landingRef = doc(
-            db,
-            TENANTS_COLLECTION,
-            tenantId,
-            "config",
-            "landing"
-        );
-        const landingSnap = await getDoc(landingRef);
-
-        if (!landingSnap.exists()) {
-            const initialized = await initializeTenantLanding(
-                tenantId,
-                tenantData.name || ""
+        if (!landing) {
+            const initialized = await initializeBusinessOwnerLanding(
+                ownerUid,
+                owner.name || ""
             );
 
             if (!initialized) {
                 return {
                     success: false,
-                    error: "تعذر إنشاء صفحة الهبوط الافتراضية.",
+                    error: "تعذر إنشاء صفحة الموقع.",
                     repairs,
                 };
             }
 
-            repairs.push("تم إنشاء صفحة هبوط افتراضية لمسار التاجر.");
+            repairs.push("تم إنشاء صفحة الموقع الافتراضية.");
         }
 
         return {
             success: true,
-            repairs:
-                repairs.length > 0
-                    ? repairs
-                    : ["سجلات التاجر الحالية سليمة ولا تتطلب إصلاحاً."],
+            repairs: repairs.length
+                ? repairs
+                : ["بيانات النشاط سليمة ولا تحتاج إلى إصلاح."],
         };
     } catch (error) {
-        console.error(`Error auto-repairing tenant [${tenantId}]:`, error);
-
         return {
             success: false,
             error: error.message,
@@ -684,8 +833,8 @@ export const autoRepairTenant = async (tenantId) => {
     }
 };
 
-export const generateWhatsAppReminderUrl = (tenant) => {
-    const rawPhone = tenant?.ownerPhone || "";
+export const generateWhatsAppReminderUrl = (owner) => {
+    const rawPhone = owner?.phone || "";
     let cleanPhone = rawPhone.replace(/[^0-9]/g, "");
 
     if (cleanPhone.startsWith("01")) {
@@ -694,7 +843,7 @@ export const generateWhatsAppReminderUrl = (tenant) => {
 
     if (!cleanPhone) return "";
 
-    const subscription = tenant?.subscription || {};
+    const subscription = owner?.subscription || {};
     const days = calculateDaysRemaining(subscription.endDate);
     const endDate = getDateValue(subscription.endDate);
     const endDateStr = endDate
@@ -710,17 +859,13 @@ export const generateWhatsAppReminderUrl = (tenant) => {
     } else if (days === 0) {
         daysText = "ينتهي اليوم";
     } else {
-        daysText = `سينتهي خلال ${days} ${
-            days === 1 ? "يوم" : "أيام"
-        } (بتاريخ ${endDateStr})`;
+        daysText = `سينتهي خلال ${days} أيام (بتاريخ ${endDateStr})`;
     }
 
-    const msg = `مرحباً بك ${tenant?.name || "عزيزنا الشريك"}،
-نحيطكم علماً بأن حالة اشتراككم في منصة SEKKA - سِكّة (باقة: ${
-        subscription.plan || "غير محددة"
-    }) هي: ${daysText}.
+    const message = `مرحباً بك ${owner?.name || "عزيزنا الشريك"}،
+حالة اشتراككم في منصة SEKKA - سِكّة (باقة: ${subscription.plan || "غير محددة"}) هي: ${daysText}.
 يرجى التواصل معنا لمراجعة بيانات الاشتراك وتجديده عند الحاجة.
 شكراً لاختياركم منصة سِكّة!`;
 
-    return `https://wa.me/${cleanPhone}?text=${encodeURIComponent(msg)}`;
+    return `https://wa.me/${cleanPhone}?text=${encodeURIComponent(message)}`;
 };

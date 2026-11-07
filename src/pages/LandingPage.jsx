@@ -5,7 +5,6 @@ import NavbarLanding from "../components/NavparLanding";
 import { FaCar } from "react-icons/fa";
 
 import { useAuth } from "@/context/AuthContext";
-import { useTenant } from "@/context/TenantContext";
 import {
     subscribeToLandingPage,
     getCachedLandingData,
@@ -180,23 +179,16 @@ const demoGallery = [
 ========================================================= */
 
 export default function LandingPage() {
-    const { locale = "en", tenantSlug } = useParams();
+    const { locale = "en" } = useParams();
     const navigate = useNavigate();
     const location = useLocation();
     const { user } = useAuth();
-    const { tenantId, tenantName, refreshTenant } = useTenant();
 
     const isArabic = locale === "ar";
 
-    useEffect(() => {
-        if (tenantSlug) {
-            refreshTenant(tenantSlug);
-        }
-    }, [tenantSlug, refreshTenant]);
-
     // Immediate hydration from cache to prevent layout shift & save reads
-    const [landing, setLanding] = useState(() => getCachedLandingData(tenantId));
-    const [loading, setLoading] = useState(() => !getCachedLandingData(tenantId));
+    const [landing, setLanding] = useState(() => getCachedLandingData());
+    const [loading, setLoading] = useState(() => !getCachedLandingData());
 
     /* =========================================================
        CROSS-PAGE SCROLL HANDLING (e.g. from Profile)
@@ -241,14 +233,13 @@ export default function LandingPage() {
             (error) => {
                 console.error("Landing page realtime error:", error);
                 setLoading(false);
-            },
-            { tenantId }
+            }
         );
 
         return () => {
             unsubscribe?.();
         };
-    }, [tenantId]);
+    }, []);
 
     /* =========================================================
        DATA EXTRACTION
@@ -264,14 +255,14 @@ export default function LandingPage() {
 
     const services =
         landing?.services &&
-        typeof landing.services === "object" &&
-        !Array.isArray(landing.services)
+            typeof landing.services === "object" &&
+            !Array.isArray(landing.services)
             ? landing.services
             : {
-                  ar: { eyebrow: "", title: "", description: "" },
-                  en: { eyebrow: "", title: "", description: "" },
-                  cards: {},
-              };
+                ar: { eyebrow: "", title: "", description: "" },
+                en: { eyebrow: "", title: "", description: "" },
+                cards: {},
+            };
 
     const featuredCars =
         Array.isArray(landing?.featuredCars) && landing.featuredCars.length > 0
@@ -347,13 +338,9 @@ export default function LandingPage() {
                     </div>
 
                     <p className="text-gray-400">
-                        {tenantName
-                            ? (isArabic
-                                ? `جاري تحميل تجربة ${tenantName}...`
-                                : `Loading ${tenantName} Experience...`)
-                            : (isArabic
-                                ? "جاري تحميل تجربة سِكّة..."
-                                : "Loading SEKKA Experience...")}
+                        {isArabic
+                            ? "جاري تحميل تجربة أبو هادي..."
+                            : "Loading Abu Hady Experience..."}
                     </p>
                 </div>
             </div>

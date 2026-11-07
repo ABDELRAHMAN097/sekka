@@ -8,15 +8,15 @@ const ROLE_LABELS = {
     platform_admin: "مسؤول المنصة",
     platform_staf: "فريق المنصة",
     platform_staff: "فريق المنصة",
-    tenant_owner: "مالك النشاط / التاجر",
+    tenant_owner: "التاجر",
     tenant_staf: "موظف النشاط",
     tenant_staff: "موظف النشاط",
-    tenant_driver: "سائق النشاط",
+    tenant_driver: "سائق",
     tenant_admin: "مسؤول النشاط",
     driver: "سائق",
     customer: "عميل",
-    admin: "مدير",
-    super_admin: "مسؤول عام",
+    admin: "ادمن",
+    super_admin: "سوبر ادمن",
 };
 
 export default function RoleGuard({
