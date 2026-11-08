@@ -9,11 +9,10 @@ import {
     getLandingPage,
     saveLandingPage,
 } from "@/services/landing";
-import { useTenant } from "@/context/TenantContext";
 import { useAuth } from "@/context/AuthContext";
 
 export default function EditLanding() {
-    const { tenantId, tenantName, isModuleEnabled } = useTenant();
+
     const { isPlatformAdmin, isSuperAdmin } = useAuth();
 
     const [loading, setLoading] = useState(true);
@@ -94,11 +93,9 @@ export default function EditLanding() {
                 setLoading(true);
                 setError("");
 
-                const data =
-                    await getLandingPage({
-                        forceRefresh: true,
-                        tenantId,
-                    });
+                const data = await getLandingPage({
+                    forceRefresh: true,
+                });
 
                 if (!data) {
                     return;
@@ -225,7 +222,7 @@ export default function EditLanding() {
         };
 
         loadLandingPage();
-    }, [tenantId]);
+    }, []);
 
     /* =========================================================
        HERO LANGUAGE CHANGE
@@ -462,7 +459,7 @@ export default function EditLanding() {
                 services: form.services,
                 featuredCars: form.featuredCars,
                 gallery: form.gallery,
-            }, { tenantId });
+            });
         } catch (saveErr) {
             console.warn(
                 "Firestore save after hero remove warning:",
@@ -864,7 +861,7 @@ export default function EditLanding() {
 
                 gallery:
                     form.gallery,
-            }, { tenantId });
+            },);
 
             setSuccess(
                 "Landing page saved successfully. Visitors will see the changes automatically."
@@ -882,25 +879,24 @@ export default function EditLanding() {
     };
 
     /* =========================================================
-       MODULE CHECK & LOADING
+       Page protection
     ========================================================= */
 
-    if (!isPlatformAdmin && !isSuperAdmin && !isModuleEnabled("editLanding")) {
+
+    if (!isPlatformAdmin && !isSuperAdmin) {
         return (
-            <div className="flex min-h-[400px] items-center justify-center bg-card rounded-2xl border border-border p-8 my-6 text-center">
-                <div className="max-w-md">
-                    <div className="w-16 h-16 bg-amber-500/10 text-amber-500 rounded-2xl flex items-center justify-center mx-auto mb-4 text-3xl font-bold">
-                        🔒
-                    </div>
-                    <h3 className="text-xl font-bold text-primary-color mb-2">موديول تعديل صفحة الهبوط مقفل</h3>
-                    <p className="text-gray-400 text-sm mb-4">
-                        هذه الميزة غير مفعلة في باقة المتجر الحالية ({tenantName}). يرجى التواصل مع إدارة منصة سِكّة (SEKKA) لترقية الباقة.
+            <div className="flex min-h-[400px] items-center justify-center rounded-2xl border border-border bg-card p-8 text-center">
+                <div>
+                    <h3 className="mb-2 text-xl font-bold text-primary-color">
+                        غير مصرح لك بالدخول
+                    </h3>
+                    <p className="text-sm text-gray-400">
+                        هذه الصفحة مخصصة لإدارة منصة سِكّة.
                     </p>
                 </div>
             </div>
         );
     }
-
     if (loading) {
         return (
             <div className="flex min-h-[500px] items-center justify-center bg-background p-6">
@@ -932,8 +928,8 @@ export default function EditLanding() {
 
                         <div>
                             <div className="flex items-center gap-2 mb-2">
-                                <span className="inline-flex items-center px-2.5 py-0.5 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-500 border border-emerald-500/20">
-                                    المتجر النشط: {tenantName || (isPlatformAdmin ? "المنصة المركزية (سِكّة)" : "المتجر الحالي")} {tenantId ? `(${tenantId})` : ""}
+                                <span className="inline-flex items-center rounded-full border border-emerald-500/20 bg-emerald-500/10 px-2.5 py-0.5 text-xs font-semibold text-emerald-500">
+                                    منصة سِكّة المركزية
                                 </span>
                                 <span className="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium bg-blue-500/10 text-blue-400 border border-blue-500/20">
                                     بيانات معزولة 100%
@@ -948,17 +944,6 @@ export default function EditLanding() {
                                 on your public website.
                             </p>
                         </div>
-
-                        <div className="rounded-xl border border-primary-color/20 bg-primary-color/10 px-4 py-3">
-                            <p className="text-xs text-text-muted">
-                                Publishing
-                            </p>
-
-                            <p className="mt-1 text-sm font-semibold text-primary-color">
-                                Live Website
-                            </p>
-                        </div>
-
                     </div>
                 </div>
 

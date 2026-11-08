@@ -32,9 +32,9 @@ export const routes = [
         path: "/:locale",
         element: <I18nProvider />,
         children: [
-            
+
             {
-                path: "t/:tenantSlug",
+                index: true,
                 element: <LandingPage />,
             },
             {
@@ -94,15 +94,15 @@ export const routes = [
                             },
                             {
                                 path: "setting",
-                                element:  <Setting />,
+                                element: <Setting />,
                             },
                             {
                                 path: "wallet",
-                                element:  <Wallet />,
+                                element: <Wallet />,
                             },
                             {
                                 path: "reports",
-                                element:  <Reports />,
+                                element: <Reports />,
                             },
                         ],
                     },
