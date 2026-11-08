@@ -24,11 +24,11 @@ export const BUSINESS_USER_ROLES = [
 ];
 
 export const DEFAULT_MODULES = {
-    editLanding: true,
-    fleet: true,
-    wallet: true,
-    reports: true,
-    users: true,
+    editLanding: false,
+    fleet: false,
+    wallet: false,
+    reports: false,
+    users: false,
     customDomain: false,
 };
 
@@ -201,15 +201,22 @@ export const createBusinessOwner = async (ownerUid, ownerData) => {
         throw new Error("يوجد حساب مسجل بالفعل بهذا المعرّف.");
     }
 
-    const data = createDefaultBusinessOwnerData(ownerData);
+    const data = createDefaultBusinessOwnerData({
+        name: ownerData.name,
+        email: ownerData.email,
+        phone: ownerData.phone,
+        slug: ownerData.slug,
+        domain: ownerData.domain,
+    });
 
     await setDoc(ownerRef, {
         ...data,
-        ...ownerData,
+        imageUrl: ownerData.imageUrl || "",
+        address: ownerData.address || "",
+        description: ownerData.description || "",
+        subscription: null,
         role: "business_owner",
         status: "pending",
-        slug: normalizeSlug(ownerData.slug),
-        domain: normalizeDomain(ownerData.domain),
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
     });
@@ -223,16 +230,15 @@ export const updateBusinessOwner = async (ownerUid, data) => {
     }
 
     const allowedFields = [
-        "name",
-        "email",
-        "phone",
-        "slug",
-        "domain",
-        "imageUrl",
-        "address",
-        "description",
-        "subscription",
-    ];
+    "name",
+    "email",
+    "phone",
+    "slug",
+    "domain",
+    "imageUrl",
+    "address",
+    "description",
+];
 
     const updates = {};
 
@@ -341,10 +347,7 @@ export const getBusinessOwnerUser = async (ownerUid, userUid) => {
     }
 };
 
-export const addBusinessOwnerUser = async (
-    ownerUid,
-    userData
-) => {
+export const addBusinessOwnerUser = async (ownerUid, userData) => {
     if (!ownerUid || !userData?.uid) {
         throw new Error("بيانات المستخدم غير مكتملة.");
     }
@@ -368,10 +371,14 @@ export const addBusinessOwnerUser = async (
     }
 
     await setDoc(userRef, {
-        ...userData,
         uid: userData.uid,
+        name: userData.name || "",
+        email: userData.email || "",
+        phone: userData.phone || "",
+        imageUrl: userData.imageUrl || "",
         role: userData.role,
-        status: userData.status || "active",
+        status: "active",
+        permissions: userData.permissions || {},
         createdAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
     });
@@ -451,6 +458,10 @@ export const getBusinessOwnerModules = async (ownerUid) => {
     if (!ownerUid) return { ...DEFAULT_MODULES };
 
     try {
+        const owner = await getBusinessOwner(ownerUid);
+
+        if (!owner) return { ...DEFAULT_MODULES };
+
         const snapshot = await getDocs(getOwnerModulesRef(ownerUid));
 
         const modules = { ...DEFAULT_MODULES };
@@ -712,12 +723,15 @@ export const initializeBusinessOwnerLanding = async (
     }
 };
 
+
 export const diagnoseBusinessOwner = async (ownerUid) => {
     const report = {
         ownerUid,
         exists: false,
         landingConfigured: false,
         modulesConfigured: false,
+        enabledModules: [],
+        disabledModules: [],
         subscriptionStatus: "unknown",
         daysRemaining: null,
         issues: [],
@@ -738,39 +752,85 @@ export const diagnoseBusinessOwner = async (ownerUid) => {
 
         report.exists = true;
 
-        const modules = await getBusinessOwnerModules(ownerUid);
-        report.modulesConfigured = Object.keys(modules).length > 0;
+        const modulesSnapshot = await getDocs(
+            getOwnerModulesRef(ownerUid)
+        );
+
+        const configuredModules = new Set(
+            modulesSnapshot.docs
+                .map((item) => item.id)
+                .filter((moduleKey) =>
+                    Object.hasOwn(DEFAULT_MODULES, moduleKey)
+                )
+        );
+
+        report.modulesConfigured =
+            configuredModules.size === Object.keys(DEFAULT_MODULES).length;
+
+        report.enabledModules = modulesSnapshot.docs
+            .filter(
+                (item) =>
+                    Object.hasOwn(DEFAULT_MODULES, item.id) &&
+                    item.data().enabled === true
+            )
+            .map((item) => item.id);
+
+        report.disabledModules = Object.keys(DEFAULT_MODULES).filter(
+            (moduleKey) => !report.enabledModules.includes(moduleKey)
+        );
 
         if (!report.modulesConfigured) {
-            report.issues.push("لم يتم إعداد موديولات النشاط.");
+            report.issues.push(
+                "لم يتم إعداد جميع موديولات النشاط."
+            );
         }
 
         const subscription = owner.subscription || null;
-        const daysRemaining = calculateDaysRemaining(subscription?.endDate);
-
-        report.daysRemaining = daysRemaining;
 
         if (!subscription) {
             report.issues.push("بيانات الاشتراك غير موجودة.");
         } else {
             report.subscriptionStatus = subscription.status || "unknown";
+
+            const daysRemaining = calculateDaysRemaining(
+                subscription.endDate
+            );
+
+            report.daysRemaining = daysRemaining;
+
+            if (subscription.status !== "active") {
+                report.issues.push("الاشتراك غير نشط.");
+            }
+
+            if (daysRemaining === null) {
+                report.issues.push(
+                    "تاريخ انتهاء الاشتراك غير محدد أو غير صالح."
+                );
+            } else if (daysRemaining <= 0) {
+                report.issues.push("انتهى الاشتراك.");
+            } else if (daysRemaining <= 3) {
+                report.issues.push(
+                    "الاشتراك ينتهي خلال 3 أيام أو أقل."
+                );
+            }
         }
 
-        if (daysRemaining !== null && daysRemaining <= 3) {
+        if (owner.status !== "active") {
             report.issues.push(
-                daysRemaining < 0
-                    ? "انتهى الاشتراك."
-                    : "الاشتراك ينتهي خلال 3 أيام أو أقل."
+                `حالة النشاط الحالية: ${owner.status || "غير محددة"}.`
             );
         }
 
         const landing = await getBusinessOwnerLanding(ownerUid);
+
         report.landingConfigured = Boolean(landing);
 
         if (!report.landingConfigured) {
             report.issues.push("لم يتم إعداد صفحة الموقع.");
         }
+
     } catch (error) {
+        console.error("Error diagnosing business owner:", error);
         report.issues.push(`خطأ أثناء الفحص: ${error.message}`);
     }
 

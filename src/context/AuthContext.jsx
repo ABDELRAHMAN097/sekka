@@ -33,8 +33,34 @@ const BUSINESS_USER_ROLES = [
 const normalizeRole = (role) =>
     String(role || "").toLowerCase().trim();
 
+const normalizeStatus = (status, fallback = "pending") =>
+    String(status || fallback).toLowerCase().trim();
+
 const getOwnerUid = (owner) =>
     owner?.ownerUid || owner?.id || owner?.uid || null;
+
+const getPlatformRoleRecord = async (uid) => {
+    const snapshot = await getDoc(doc(db, "platformRoles", uid));
+
+    if (!snapshot.exists()) {
+        return {
+            exists: false,
+            role: null,
+        };
+    }
+
+    const data = snapshot.data();
+    const role = normalizeRole(data.role);
+    const status = normalizeStatus(data.status);
+
+    return {
+        exists: true,
+        role:
+            status === "active" && PLATFORM_ROLES.includes(role)
+                ? role
+                : null,
+    };
+};
 
 const getPlatformProfile = async (uid, platformRole) => {
     const snapshot = await getDoc(doc(db, "users", uid));
@@ -46,6 +72,7 @@ const getPlatformProfile = async (uid, platformRole) => {
         ownerUid: null,
         role: platformRole,
         status: "active",
+        businessStatus: null,
     };
 };
 
@@ -64,7 +91,8 @@ const getBusinessOwnerProfile = async (uid) => {
         uid,
         ownerUid: uid,
         role,
-        status: data.status || "pending",
+        status: normalizeStatus(data.status),
+        businessStatus: normalizeStatus(data.status),
     };
 };
 
@@ -72,7 +100,6 @@ const getBusinessUserProfile = async (uid, owner) => {
     const ownerUid = getOwnerUid(owner);
 
     if (!ownerUid) return null;
-    if (normalizeRole(owner.status) !== "active") return null;
 
     const snapshot = await getDoc(
         doc(db, "users", ownerUid, "users", uid)
@@ -84,57 +111,59 @@ const getBusinessUserProfile = async (uid, owner) => {
     const role = normalizeRole(data.role);
 
     if (!BUSINESS_USER_ROLES.includes(role)) return null;
-    if (data.status !== "active") return null;
 
     return {
         ...data,
         uid,
         ownerUid,
         role,
-        status: data.status,
+        status: normalizeStatus(data.status),
+        businessStatus: normalizeStatus(owner.status),
     };
 };
 
-const getActivePlatformRole = async (uid) => {
-    const snapshot = await getDoc(doc(db, "platformRoles", uid));
-
-    if (!snapshot.exists()) return null;
-
-    const data = snapshot.data();
-    const role = normalizeRole(data.role);
-
-    return data.status === "active" && PLATFORM_ROLES.includes(role)
-        ? role
-        : null;
-};
-
 const loadAuthProfile = async (uid) => {
-    const platformRole = await getActivePlatformRole(uid);
+    const platformRecord = await getPlatformRoleRecord(uid);
 
-    if (platformRole) {
-        const profile = await getPlatformProfile(uid, platformRole);
+    if (platformRecord.exists) {
+        if (!platformRecord.role) {
+            return {
+                profile: null,
+                platformRole: null,
+            };
+        }
+
+        const profile = await getPlatformProfile(
+            uid,
+            platformRecord.role
+        );
 
         return {
             profile,
-            platformRole,
+            platformRole: platformRecord.role,
         };
     }
 
     const owner = await getPublicBusinessOwner();
 
     if (owner) {
-        const businessUserProfile = await getBusinessUserProfile(uid, owner);
+        const ownerUid = getOwnerUid(owner);
+
+        if (uid === ownerUid) {
+            return {
+                profile: await getBusinessOwnerProfile(uid),
+                platformRole: null,
+            };
+        }
 
         return {
-            profile: businessUserProfile,
+            profile: await getBusinessUserProfile(uid, owner),
             platformRole: null,
         };
     }
 
-    const ownerProfile = await getBusinessOwnerProfile(uid);
-
     return {
-        profile: ownerProfile,
+        profile: await getBusinessOwnerProfile(uid),
         platformRole: null,
     };
 };
@@ -151,6 +180,7 @@ export const AuthProvider = ({ children }) => {
         const targetUid = uid || auth.currentUser?.uid;
 
         if (!targetUid) {
+            requestRef.current += 1;
             setProfile(null);
             setPlatformRole(null);
             return null;
@@ -168,7 +198,10 @@ export const AuthProvider = ({ children }) => {
 
             return result.profile || null;
         } catch (error) {
-            console.error("Error refreshing authentication profile:", error);
+            console.error(
+                "Error refreshing authentication profile:",
+                error
+            );
 
             if (requestId === requestRef.current) {
                 setProfile(null);
@@ -183,6 +216,7 @@ export const AuthProvider = ({ children }) => {
         const targetUid = uid || auth.currentUser?.uid;
 
         if (!targetUid) {
+            requestRef.current += 1;
             setPlatformRole(null);
             setProfile(null);
             return null;
@@ -214,39 +248,60 @@ export const AuthProvider = ({ children }) => {
     useEffect(() => {
         let active = true;
 
-        const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-            const requestId = ++requestRef.current;
+        const unsubscribe = onAuthStateChanged(
+            auth,
+            async (firebaseUser) => {
+                const requestId = ++requestRef.current;
 
-            setLoading(true);
-            setUser(firebaseUser);
-            setProfile(null);
-            setPlatformRole(null);
-
-            if (!firebaseUser) {
-                if (active) setLoading(false);
-                return;
-            }
-
-            try {
-                const result = await loadAuthProfile(firebaseUser.uid);
-
-                if (!active || requestId !== requestRef.current) return;
-
-                setProfile(result.profile || null);
-                setPlatformRole(result.platformRole || null);
-            } catch (error) {
-                console.error("Error loading authentication data:", error);
-
-                if (!active || requestId !== requestRef.current) return;
-
+                setLoading(true);
+                setUser(firebaseUser);
                 setProfile(null);
                 setPlatformRole(null);
-            } finally {
-                if (active && requestId === requestRef.current) {
-                    setLoading(false);
+
+                if (!firebaseUser) {
+                    if (active) setLoading(false);
+                    return;
+                }
+
+                try {
+                    const result = await loadAuthProfile(
+                        firebaseUser.uid
+                    );
+
+                    if (
+                        !active ||
+                        requestId !== requestRef.current
+                    ) {
+                        return;
+                    }
+
+                    setProfile(result.profile || null);
+                    setPlatformRole(result.platformRole || null);
+                } catch (error) {
+                    console.error(
+                        "Error loading authentication data:",
+                        error
+                    );
+
+                    if (
+                        !active ||
+                        requestId !== requestRef.current
+                    ) {
+                        return;
+                    }
+
+                    setProfile(null);
+                    setPlatformRole(null);
+                } finally {
+                    if (
+                        active &&
+                        requestId === requestRef.current
+                    ) {
+                        setLoading(false);
+                    }
                 }
             }
-        });
+        );
 
         return () => {
             active = false;
@@ -256,17 +311,30 @@ export const AuthProvider = ({ children }) => {
     }, []);
 
     const role = normalizeRole(profile?.role);
+    const accountStatus = normalizeStatus(profile?.status);
+    const businessStatus = normalizeStatus(
+        profile?.businessStatus,
+        accountStatus
+    );
 
-    const isSuperAdmin = role === "super_admin";
+    const isSuperAdmin =
+        platformRole === "super_admin";
+
     const isPlatformAdmin =
-        role === "platform_admin" || platformRole === "platform_admin";
-    const isPlatformStaff =
-        role === "platform_staff" || platformRole === "platform_staff";
-    const isPlatformUser =
-        isSuperAdmin || isPlatformAdmin || isPlatformStaff;
+        platformRole === "platform_admin";
 
-    const isBusinessOwner = role === "business_owner";
-    const isOwnerActive = isBusinessOwner && profile?.status === "active";
+    const isPlatformStaff =
+        platformRole === "platform_staff";
+
+    const isPlatformUser =
+        PLATFORM_ROLES.includes(platformRole);
+
+    const isBusinessOwner =
+        BUSINESS_OWNER_ROLES.includes(role);
+
+    const isOwnerActive =
+        isBusinessOwner &&
+        accountStatus === "active";
 
     const isAdmin = role === "admin";
     const isStaff = role === "staff";
@@ -274,28 +342,44 @@ export const AuthProvider = ({ children }) => {
     const isDriver = role === "driver";
     const isCustomer = role === "customer";
 
+    const isAccountActive =
+        Boolean(profile) && accountStatus === "active";
+
+    const isBusinessActive =
+        isPlatformUser ||
+        (
+            Boolean(profile) &&
+            businessStatus === "active"
+        );
+
     const ownerUid =
-        profile?.ownerUid || (isBusinessOwner ? user?.uid : null);
+        profile?.ownerUid ||
+        (isBusinessOwner ? user?.uid : null);
 
     const canAccessDashboard =
         isPlatformUser ||
-        isBusinessOwner ||
-        isAdmin ||
-        isStaff ||
-        isWorker ||
-        isDriver;
+        (
+            isAccountActive &&
+            isBusinessActive &&
+            (
+                isBusinessOwner ||
+                isAdmin ||
+                isStaff ||
+                isWorker ||
+                isDriver
+            )
+        );
 
-    const hasRole = (allowedRoles = []) => {
+    const hasRole = useCallback((allowedRoles = []) => {
         const normalizedRoles = allowedRoles.map(normalizeRole);
 
         if (!normalizedRoles.length) return true;
-        if (isSuperAdmin) return true;
 
         return (
             normalizedRoles.includes(role) ||
             normalizedRoles.includes(platformRole)
         );
-    };
+    }, [role, platformRole]);
 
     return (
         <AuthContext.Provider
@@ -306,6 +390,11 @@ export const AuthProvider = ({ children }) => {
                 ownerUid,
                 platformRole,
                 loading,
+
+                accountStatus,
+                businessStatus,
+                isAccountActive,
+                isBusinessActive,
 
                 isSuperAdmin,
                 isPlatformAdmin,
@@ -337,7 +426,9 @@ export const useAuth = () => {
     const context = useContext(AuthContext);
 
     if (!context) {
-        throw new Error("useAuth must be used within an AuthProvider");
+        throw new Error(
+            "useAuth must be used within an AuthProvider"
+        );
     }
 
     return context;

@@ -1,22 +1,31 @@
 
-import { Navigate, Outlet, useLocation, useParams } from "react-router-dom";
+import {
+    Navigate,
+    Outlet,
+    useLocation,
+    useParams,
+} from "react-router-dom";
 import { useAuth } from "@/context/AuthContext";
 import { toast } from "react-toastify";
 import { useEffect, useRef } from "react";
 
 const ROLE_LABELS = {
+    super_admin: "سوبر أدمن",
     platform_admin: "مسؤول المنصة",
-    platform_staf: "فريق المنصة",
     platform_staff: "فريق المنصة",
-    tenant_owner: "التاجر",
-    tenant_staf: "موظف النشاط",
-    tenant_staff: "موظف النشاط",
-    tenant_driver: "سائق",
-    tenant_admin: "مسؤول النشاط",
+    business_owner: "صاحب النشاط",
+    admin: "مسؤول النشاط",
+    staff: "موظف النشاط",
+    worker: "عامل النشاط",
     driver: "سائق",
     customer: "عميل",
-    admin: "ادمن",
-    super_admin: "سوبر ادمن",
+};
+
+const STATUS_MESSAGES = {
+    pending: "حسابك قيد المراجعة، وسيتم تفعيل الحساب بعد موافقة إدارة منصة سِكّة.",
+    blocked: "تم إيقاف حسابك. يرجى التواصل مع إدارة منصة سِكّة.",
+    suspended: "حسابك موقوف مؤقتًا. يرجى التواصل مع إدارة منصة سِكّة.",
+    inactive: "حسابك غير مفعّل حاليًا. يرجى التواصل مع إدارة منصة سِكّة.",
 };
 
 export default function RoleGuard({
@@ -25,9 +34,8 @@ export default function RoleGuard({
 }) {
     const {
         user,
+        profile,
         role,
-        isCustomer,
-        isPlatformAdmin,
         canAccessDashboard,
         hasRole,
         loading,
@@ -37,31 +45,63 @@ export default function RoleGuard({
     const location = useLocation();
     const hasWarnedRef = useRef(false);
 
-    // If allowedRoles is specified, check against those specific roles.
-    // If allowedRoles is empty (general dashboard wrapper), require general dashboard access (canAccessDashboard).
+    const accountStatus = String(
+        profile?.status || "active"
+    ).toLowerCase().trim();
+
+    const normalizedRole = String(
+        role || profile?.role || ""
+    ).toLowerCase().trim();
+
+    const isCustomer = normalizedRole === "customer";
+
+    const isAccountActive = accountStatus === "active";
+
     const isAllowed =
         Boolean(user) &&
-        (allowedRoles.length === 0
-            ? canAccessDashboard
-            : hasRole(allowedRoles));
+        isAccountActive &&
+        (
+            allowedRoles.length === 0
+                ? Boolean(canAccessDashboard)
+                : hasRole(allowedRoles)
+        );
+
+    const redirectTo = redirectPath || `/${locale}`;
 
     useEffect(() => {
-        if (
-            !loading &&
-            user &&
-            (isCustomer || !canAccessDashboard || !isAllowed) &&
-            !hasWarnedRef.current
-        ) {
-            toast.warn(
-                "عذراً، حساب العميل لا يملك صلاحية دخول لوحة التحكم."
-            );
-            hasWarnedRef.current = true;
+        if (loading || !user || isAllowed || hasWarnedRef.current) {
+            return;
         }
 
-        if (!user || canAccessDashboard) {
+        if (accountStatus !== "active") {
+            toast.warn(
+                STATUS_MESSAGES[accountStatus] ||
+                "حسابك غير متاح حاليًا."
+            );
+        } else if (isCustomer) {
+            toast.warn(
+                "حساب العميل لا يملك صلاحية دخول لوحة التحكم."
+            );
+        } else {
+            toast.warn(
+                "عذراً، لا تملك صلاحية الوصول إلى هذه الصفحة."
+            );
+        }
+
+        hasWarnedRef.current = true;
+    }, [
+        loading,
+        user,
+        isAllowed,
+        accountStatus,
+        isCustomer,
+    ]);
+
+    useEffect(() => {
+        if (!user || isAllowed) {
             hasWarnedRef.current = false;
         }
-    }, [loading, user, isCustomer, canAccessDashboard, isAllowed]);
+    }, [user, isAllowed]);
 
     if (loading) {
         return (
@@ -84,11 +124,10 @@ export default function RoleGuard({
         );
     }
 
-    // Customers and any accounts without dashboard permissions must be redirected
-    if (isCustomer || !canAccessDashboard) {
+    if (!isAccountActive || isCustomer || !canAccessDashboard) {
         return (
             <Navigate
-                to={redirectPath || `/${locale}`}
+                to={redirectTo}
                 replace
             />
         );
@@ -107,7 +146,7 @@ export default function RoleGuard({
 
                 <p className="text-gray-500 max-w-md mb-6 text-sm">
                     رتبتك الحالية (
-                    {ROLE_LABELS[role] || role || "غير محدد"}
+                    {ROLE_LABELS[normalizedRole] || normalizedRole || "غير محدد"}
                     ) لا تملك صلاحية الوصول إلى هذه الصفحة.
                 </p>
 

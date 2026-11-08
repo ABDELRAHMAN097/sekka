@@ -1,34 +1,22 @@
 
 import { Outlet } from "react-router-dom";
-import { useTenant } from "@/context/TenantContext";
+import { useBusiness } from "@/context/TenantContext";
 import { useAuth } from "@/context/AuthContext";
 import { FiLock } from "react-icons/fi";
 
 export default function ModuleGuard({ moduleKey, children }) {
     const {
         isModuleEnabled,
-        tenantName,
-        tenantId,
-        loadingTenant,
-    } = useTenant();
+        business,
+        ownerUid,
+        loadingBusiness,
+        isImpersonating,
+    } = useBusiness();
 
     const {
-        role,
-        platformRole,
-        isPlatformAdmin,
-        isSuperAdmin,
+        isPlatformUser,
         loading: authLoading,
     } = useAuth();
-
-    const normalizedRole = String(role || "").toLowerCase().trim();
-    const normalizedPlatformRole = String(platformRole || "").toLowerCase().trim();
-
-    const hasPlatformAccess =
-        isPlatformAdmin ||
-        isSuperAdmin ||
-        normalizedRole === "platform_admin" ||
-        normalizedRole === "super_admin" ||
-        normalizedPlatformRole === "platform_admin";
 
     const renderPage = children || <Outlet />;
 
@@ -43,13 +31,11 @@ export default function ModuleGuard({ moduleKey, children }) {
         );
     }
 
-    // Platform administrators are not restricted by tenant subscription modules.
-    if (hasPlatformAccess) {
+    if (isPlatformUser && !isImpersonating) {
         return renderPage;
     }
 
-    // Wait for the active tenant to load before checking its subscription.
-    if (loadingTenant) {
+    if (loadingBusiness) {
         return (
             <div className="min-h-[60vh] flex flex-col items-center justify-center p-6 text-center">
                 <div className="w-10 h-10 border-4 border-primary-color border-t-transparent rounded-full animate-spin mb-3" />
@@ -60,9 +46,44 @@ export default function ModuleGuard({ moduleKey, children }) {
         );
     }
 
-    // Pages outside a tenant subscription scope are not restricted by this guard.
-    if (!tenantId) {
-        return renderPage;
+    if (!ownerUid || !business) {
+        return (
+            <div className="min-h-[60vh] flex flex-col items-center justify-center p-6 text-center">
+                <div className="max-w-md p-8 rounded-2xl bg-card border border-border shadow-sm">
+                    <div className="w-16 h-16 rounded-2xl bg-amber-500/10 text-amber-500 flex items-center justify-center mx-auto mb-4">
+                        <FiLock className="w-8 h-8" />
+                    </div>
+
+                    <h3 className="text-xl font-bold text-primary-color mb-2">
+                        النشاط غير متاح
+                    </h3>
+
+                    <p className="text-gray-400 text-sm leading-relaxed">
+                        لم يتم العثور على بيانات النشاط المرتبط بهذا الحساب.
+                    </p>
+                </div>
+            </div>
+        );
+    }
+
+    if (business.status !== "active") {
+        return (
+            <div className="min-h-[60vh] flex flex-col items-center justify-center p-6 text-center">
+                <div className="max-w-md p-8 rounded-2xl bg-card border border-border shadow-sm">
+                    <div className="w-16 h-16 rounded-2xl bg-amber-500/10 text-amber-500 flex items-center justify-center mx-auto mb-4">
+                        <FiLock className="w-8 h-8" />
+                    </div>
+
+                    <h3 className="text-xl font-bold text-primary-color mb-2">
+                        النشاط غير مفعّل
+                    </h3>
+
+                    <p className="text-gray-400 text-sm leading-relaxed">
+                        حالة النشاط الحالية لا تسمح باستخدام موديولاته. يرجى التواصل مع إدارة منصة SEKKA.
+                    </p>
+                </div>
+            </div>
+        );
     }
 
     const moduleEnabled = moduleKey && isModuleEnabled(moduleKey);
@@ -81,7 +102,7 @@ export default function ModuleGuard({ moduleKey, children }) {
 
                     <p className="text-gray-400 text-sm mb-6 leading-relaxed">
                         {moduleKey
-                            ? `موديول (${moduleKey}) غير متاح حالياً ضمن خطة نشاط (${tenantName || "الحالي"}). يرجى التواصل مع إدارة منصة SEKKA - سِكّة لتفعيل الموديول.`
+                            ? `موديول (${moduleKey}) غير متاح حالياً ضمن خطة نشاط (${business.name || "الحالي"}). يرجى التواصل مع إدارة منصة SEKKA - سِكّة لتفعيل الموديول.`
                             : "لم يتم تحديد الموديول المطلوب لهذه الصفحة. يرجى مراجعة إعدادات المسارات."}
                     </p>
 

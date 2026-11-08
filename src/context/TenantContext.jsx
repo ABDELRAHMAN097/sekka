@@ -5,291 +5,329 @@ import {
     useEffect,
     useState,
     useCallback,
+    useMemo,
+    useRef,
 } from "react";
-import { onAuthStateChanged } from "firebase/auth";
-import { doc, getDoc } from "firebase/firestore";
 
-import { auth } from "@/services/authService";
+import { useAuth } from "@/context/AuthContext";
 import {
-    getBusinessOwnerBySlug,
-    getBusinessOwnerByDomain,
+    getBusinessOwner,
+    getBusinessOwnerModules,
+    calculateDaysRemaining,
+    DEFAULT_MODULES,
 } from "@/services/tenantService";
-import { db } from "@/config/firebase";
 
-const AuthContext = createContext(null);
+const BusinessContext = createContext(null);
 
-const PLATFORM_ROLES = [
-    "super_admin",
-    "platform_admin",
-    "platform_staff",
-];
+const getDefaultModules = () =>
+    Object.fromEntries(
+        Object.keys(DEFAULT_MODULES).map((key) => [key, false])
+    );
 
-const BUSINESS_ROLES = [
-    "business_owner",
-    "admin",
-    "staff",
-    "worker",
-    "driver",
-    "customer",
-];
+const normalizeRole = (role) =>
+    String(role || "").toLowerCase().trim();
 
-const PLATFORM_HOSTS = [
-    "sekka504.vercel.app",
-    "localhost",
-    "127.0.0.1",
-];
-
-const getSiteOwner = async () => {
-    if (typeof window === "undefined") return null;
-
-    const hostname = window.location.hostname
-        .trim()
-        .toLowerCase();
-
-    if (PLATFORM_HOSTS.includes(hostname)) return null;
-
-    if (hostname.endsWith(".sekka504.vercel.app")) {
-        const slug = hostname.replace(".sekka504.vercel.app", "");
-
-        if (!slug || slug.includes(".")) return null;
-
-        return getBusinessOwnerBySlug(slug);
-    }
-
-    if (
-        hostname.endsWith(".vercel.app") ||
-        hostname.endsWith(".web.app") ||
-        hostname.endsWith(".firebaseapp.com")
-    ) {
-        return null;
-    }
-
-    return getBusinessOwnerByDomain(hostname);
-};
-
-const getPlatformRole = async (uid) => {
-    const snapshot = await getDoc(doc(db, "platformRoles", uid));
-
-    if (!snapshot.exists()) return null;
-
-    const data = snapshot.data();
-    const role = String(data?.role || "").trim().toLowerCase();
-
-    return data?.status === "active" && PLATFORM_ROLES.includes(role)
-        ? role
-        : null;
-};
-
-const getCurrentProfile = async (uid) => {
-    const [platformRole, siteOwner] = await Promise.all([
-        getPlatformRole(uid).catch(() => null),
-        getSiteOwner().catch(() => null),
-    ]);
-
-    if (platformRole) {
-        const snapshot = await getDoc(doc(db, "users", uid));
-        const data = snapshot.exists() ? snapshot.data() : {};
-
-        return {
-            uid,
-            ...data,
-            role: platformRole,
-            platformRole,
-            status: data.status || "active",
-        };
-    }
-
-    if (siteOwner) {
-        const ownerUid = siteOwner.ownerUid || siteOwner.uid || siteOwner.id;
-
-        if (!ownerUid || siteOwner.status !== "active") {
-            return null;
-        }
-
-        const snapshot = await getDoc(
-            doc(db, "users", ownerUid, "users", uid)
-        );
-
-        if (!snapshot.exists()) return null;
-
-        const data = snapshot.data();
-        const role = String(data.role || "").trim().toLowerCase();
-
-        if (!BUSINESS_ROLES.includes(role) || data.status !== "active") {
-            return null;
-        }
-
-        return {
-            uid,
-            ...data,
-            role,
-            ownerUid,
-            ownerName: siteOwner.name || "",
-            ownerStatus: siteOwner.status,
-        };
-    }
-
-    const snapshot = await getDoc(doc(db, "users", uid));
-
-    if (!snapshot.exists()) return null;
-
-    const data = snapshot.data();
-    const role = String(data.role || "").trim().toLowerCase();
-
-    if (role !== "business_owner") return null;
-
-    return {
-        uid,
-        ...data,
-        role,
-        status: data.status || "pending",
-    };
-};
-
-export const AuthProvider = ({ children }) => {
-    const [user, setUser] = useState(null);
-    const [profile, setProfile] = useState(null);
-    const [platformRole, setPlatformRole] = useState(null);
-    const [loading, setLoading] = useState(true);
-
-    const refreshProfile = useCallback(async (uid) => {
-        const targetUid = uid || auth.currentUser?.uid;
-
-        if (!targetUid) {
-            setProfile(null);
-            return null;
-        }
-
-        try {
-            const data = await getCurrentProfile(targetUid);
-            setProfile(data);
-            setPlatformRole(data?.platformRole || null);
-            return data;
-        } catch (error) {
-            console.error("Error refreshing profile:", error);
-            setProfile(null);
-            return null;
-        }
-    }, []);
-
-    const refreshPlatformRole = useCallback(async (uid) => {
-        if (!uid) {
-            setPlatformRole(null);
-            return null;
-        }
-
-        try {
-            const role = await getPlatformRole(uid);
-            setPlatformRole(role);
-            return role;
-        } catch (error) {
-            setPlatformRole(null);
-            return null;
-        }
-    }, []);
-
-    useEffect(() => {
-        let active = true;
-
-        const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-            setLoading(true);
-            setUser(firebaseUser);
-            setProfile(null);
-            setPlatformRole(null);
-
-            if (!firebaseUser) {
-                setLoading(false);
-                return;
-            }
-
-            try {
-                const data = await getCurrentProfile(firebaseUser.uid);
-
-                if (!active) return;
-
-                setProfile(data);
-                setPlatformRole(data?.platformRole || null);
-            } catch (error) {
-                console.error("Error loading authentication data:", error);
-
-                if (active) {
-                    setProfile(null);
-                    setPlatformRole(null);
-                }
-            } finally {
-                if (active) setLoading(false);
-            }
-        });
-
-        return () => {
-            active = false;
-            unsubscribe();
-        };
-    }, []);
-
-    const role = profile?.role || null;
-
-    const isSuperAdmin = role === "super_admin";
-    const isPlatformAdmin = role === "platform_admin";
-    const isPlatformStaff = role === "platform_staff";
-    const isPlatformUser = PLATFORM_ROLES.includes(role);
-
-    const isBusinessOwner = role === "business_owner";
-    const isAdmin = isPlatformAdmin || isSuperAdmin ||
-        isBusinessOwner || role === "admin";
-    const isStaff = role === "staff";
-    const isWorker = role === "worker";
-    const isDriver = role === "driver";
-    const isCustomer = role === "customer";
-
-    const canAccessDashboard =
-        isPlatformUser ||
-        isBusinessOwner ||
-        ["admin", "staff", "worker", "driver"].includes(role);
-
-    const hasRole = useCallback((allowedRoles = []) => {
-        if (!allowedRoles.length) return true;
-        if (isSuperAdmin) return true;
-
-        return allowedRoles.includes(role) ||
-            allowedRoles.includes(platformRole);
-    }, [role, platformRole, isSuperAdmin]);
-
-    const value = {
+export const BusinessProvider = ({ children }) => {
+    const {
         user,
         profile,
         role,
-        platformRole,
-        loading,
+        isPlatformUser,
         isSuperAdmin,
         isPlatformAdmin,
-        isPlatformStaff,
+    } = useAuth();
+
+    const [business, setBusiness] = useState(null);
+    const [businessModules, setBusinessModules] = useState(
+        getDefaultModules
+    );
+    const [loadingBusiness, setLoadingBusiness] = useState(true);
+    const [impersonatedBusiness, setImpersonatedBusiness] =
+        useState(null);
+    const [impersonationLoading, setImpersonationLoading] =
+        useState(false);
+
+    const requestRef = useRef(0);
+
+    const isImpersonating = Boolean(impersonatedBusiness);
+
+    const currentOwnerUid = useMemo(() => {
+        if (isImpersonating) {
+            return impersonatedBusiness?.ownerUid || null;
+        }
+
+        if (isPlatformUser) return null;
+
+        if (normalizeRole(role) === "business_owner") {
+            return profile?.ownerUid || profile?.uid || user?.uid || null;
+        }
+
+        return profile?.ownerUid || null;
+    }, [
+        isImpersonating,
+        impersonatedBusiness,
         isPlatformUser,
-        isBusinessOwner,
-        isAdmin,
-        isStaff,
-        isWorker,
-        isDriver,
-        isCustomer,
-        canAccessDashboard,
-        hasRole,
-        refreshProfile,
-        refreshPlatformRole,
+        role,
+        profile,
+        user,
+    ]);
+
+    const loadBusinessData = useCallback(async (ownerUid) => {
+        if (!ownerUid) {
+            return {
+                business: null,
+                modules: getDefaultModules(),
+            };
+        }
+
+        const ownerData = await getBusinessOwner(ownerUid);
+
+        if (!ownerData) {
+            return {
+                business: null,
+                modules: getDefaultModules(),
+            };
+        }
+
+        const savedModules = await getBusinessOwnerModules(ownerUid);
+
+        return {
+            business: {
+                ...ownerData,
+                ownerUid,
+            },
+            modules: {
+                ...getDefaultModules(),
+                ...(savedModules || {}),
+            },
+        };
+    }, []);
+
+    const refreshBusiness = useCallback(async (ownerUid) => {
+        const targetOwnerUid = ownerUid || currentOwnerUid;
+        const requestId = ++requestRef.current;
+
+        if (!targetOwnerUid) {
+            setBusiness(null);
+            setBusinessModules(getDefaultModules());
+            setLoadingBusiness(false);
+            return null;
+        }
+
+        setLoadingBusiness(true);
+
+        try {
+            const result = await loadBusinessData(targetOwnerUid);
+
+            if (requestId !== requestRef.current) return null;
+
+            setBusiness(result.business);
+            setBusinessModules(result.modules);
+
+            return result.business;
+        } catch (error) {
+            if (requestId === requestRef.current) {
+                setBusiness(null);
+                setBusinessModules(getDefaultModules());
+            }
+
+            console.error("Error refreshing business context:", error);
+            throw error;
+        } finally {
+            if (requestId === requestRef.current) {
+                setLoadingBusiness(false);
+            }
+        }
+    }, [currentOwnerUid, loadBusinessData]);
+
+    useEffect(() => {
+        let active = true;
+        const requestId = ++requestRef.current;
+
+        const loadBusiness = async () => {
+            if (!user || !currentOwnerUid) {
+                setBusiness(null);
+                setBusinessModules(getDefaultModules());
+                setLoadingBusiness(false);
+                return;
+            }
+
+            setLoadingBusiness(true);
+
+            try {
+                const result = await loadBusinessData(currentOwnerUid);
+
+                if (!active || requestId !== requestRef.current) {
+                    return;
+                }
+
+                setBusiness(result.business);
+                setBusinessModules(result.modules);
+            } catch (error) {
+                if (!active || requestId !== requestRef.current) {
+                    return;
+                }
+
+                console.error("Error loading business context:", error);
+                setBusiness(null);
+                setBusinessModules(getDefaultModules());
+            } finally {
+                if (active && requestId === requestRef.current) {
+                    setLoadingBusiness(false);
+                }
+            }
+        };
+
+        loadBusiness();
+
+        return () => {
+            active = false;
+        };
+    }, [user, currentOwnerUid, loadBusinessData]);
+
+    const startImpersonation = useCallback(async (ownerUid) => {
+        if (!isSuperAdmin && !isPlatformAdmin) {
+            throw new Error("ليس لديك صلاحية الدخول إلى نشاط آخر.");
+        }
+
+        if (!ownerUid) {
+            throw new Error("لم يتم تحديد النشاط.");
+        }
+
+        const requestId = ++requestRef.current;
+
+        setImpersonationLoading(true);
+
+        try {
+            const result = await loadBusinessData(ownerUid);
+
+            if (requestId !== requestRef.current) {
+                throw new Error("تم إلغاء طلب الدخول إلى النشاط.");
+            }
+
+            if (!result.business) {
+                throw new Error("النشاط المطلوب غير موجود.");
+            }
+
+            setImpersonatedBusiness({
+                ...result.business,
+                ownerUid,
+            });
+
+            setBusiness(result.business);
+            setBusinessModules(result.modules);
+            setLoadingBusiness(false);
+
+            return result.business;
+        } finally {
+            setImpersonationLoading(false);
+        }
+    }, [
+        isSuperAdmin,
+        isPlatformAdmin,
+        loadBusinessData,
+    ]);
+
+    const exitImpersonation = useCallback(() => {
+        requestRef.current += 1;
+
+        setImpersonatedBusiness(null);
+        setBusiness(null);
+        setBusinessModules(getDefaultModules());
+        setLoadingBusiness(true);
+    }, []);
+
+    const daysRemaining = calculateDaysRemaining(
+        business?.subscription?.endDate
+    );
+
+    const hasSubscriptionEndDate = Boolean(
+        business?.subscription?.endDate
+    );
+
+    const isExpired =
+        business?.status === "active" &&
+        hasSubscriptionEndDate &&
+        typeof daysRemaining === "number" &&
+        daysRemaining <= 0;
+
+    const isExpiringSoon =
+        business?.status === "active" &&
+        hasSubscriptionEndDate &&
+        typeof daysRemaining === "number" &&
+        daysRemaining > 0 &&
+        daysRemaining <= 3;
+
+    const isModuleEnabled = useCallback((moduleKey) => {
+        if (
+            !moduleKey ||
+            !Object.hasOwn(DEFAULT_MODULES, moduleKey)
+        ) {
+            return false;
+        }
+
+        if (!business || business.status !== "active") {
+            return false;
+        }
+
+        if (business.subscription?.endDate) {
+            const remainingDays = calculateDaysRemaining(
+                business.subscription.endDate
+            );
+
+            if (
+                typeof remainingDays === "number" &&
+                remainingDays <= 0
+            ) {
+                return false;
+            }
+        }
+
+        return businessModules[moduleKey] === true;
+    }, [business, businessModules]);
+
+    const value = {
+        business,
+        ownerUid: currentOwnerUid,
+        businessModules,
+        loadingBusiness,
+
+        tenantName: business?.name || "",
+        tenantId: currentOwnerUid,
+
+        refreshBusiness,
+        isModuleEnabled,
+        daysRemaining,
+        isExpiringSoon,
+        isExpired,
+
+        isPlatformUser,
+        isImpersonating,
+        impersonatedBusiness,
+        impersonationLoading,
+
+        startImpersonation,
+        exitImpersonation,
     };
 
     return (
-        <AuthContext.Provider value={value}>
+        <BusinessContext.Provider value={value}>
             {children}
-        </AuthContext.Provider>
+        </BusinessContext.Provider>
     );
 };
 
-export const useAuth = () => {
-    const context = useContext(AuthContext);
+export const useBusiness = () => {
+    const context = useContext(BusinessContext);
 
     if (!context) {
-        throw new Error("useAuth must be used within an AuthProvider");
+        throw new Error(
+            "useBusiness must be used within a BusinessProvider"
+        );
     }
 
     return context;
 };
+
+export const useTenant = useBusiness;
+export const TenantProvider = BusinessProvider;

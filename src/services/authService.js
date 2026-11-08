@@ -29,7 +29,9 @@ import {
 
 export const googleProvider = new GoogleAuthProvider();
 
-const PLATFORM_HOST = "sekka504.vercel.app";
+const PLATFORM_HOST = (
+    import.meta.env.VITE_PLATFORM_HOST || "sekka504.vercel.app"
+).trim().toLowerCase();
 
 const PLATFORM_ROLES = [
     "super_admin",
@@ -52,40 +54,11 @@ const BUSINESS_USER_ROLES = [
 const normalizeRole = (role) =>
     String(role || "").trim().toLowerCase();
 
+const normalizeStatus = (status, fallback = "pending") =>
+    String(status || fallback).trim().toLowerCase();
+
 const getOwnerUid = (owner) =>
     owner?.ownerUid || owner?.id || owner?.uid || null;
-
-export const getPublicBusinessOwner = async () => {
-    if (typeof window === "undefined") return null;
-
-    const hostname = window.location.hostname.trim().toLowerCase();
-
-    if (
-        hostname === PLATFORM_HOST ||
-        hostname === "localhost" ||
-        hostname === "127.0.0.1"
-    ) {
-        return null;
-    }
-
-    if (hostname.endsWith(`.${PLATFORM_HOST}`)) {
-        const slug = hostname.slice(0, -(PLATFORM_HOST.length + 1));
-
-        if (!slug || slug.includes(".")) return null;
-
-        return getBusinessOwnerBySlug(slug);
-    }
-
-    if (
-        hostname.endsWith(".vercel.app") ||
-        hostname.endsWith(".web.app") ||
-        hostname.endsWith(".firebaseapp.com")
-    ) {
-        return null;
-    }
-
-    return getBusinessOwnerByDomain(hostname);
-};
 
 const getRootUserRef = (uid) =>
     doc(db, "users", uid);
@@ -93,16 +66,111 @@ const getRootUserRef = (uid) =>
 const getBusinessUserRef = (ownerUid, userUid) =>
     doc(db, "users", ownerUid, "users", userUid);
 
-const getActivePlatformRole = async (uid) => {
+const getPlatformRoleRecord = async (uid) => {
     const snapshot = await getDoc(doc(db, "platformRoles", uid));
 
-    if (!snapshot.exists()) return null;
+    if (!snapshot.exists()) {
+        return {
+            exists: false,
+            role: null,
+        };
+    }
 
     const data = snapshot.data();
     const role = normalizeRole(data.role);
+    const status = normalizeStatus(data.status);
 
-    return data.status === "active" && PLATFORM_ROLES.includes(role)
-        ? role
+    return {
+        exists: true,
+        role:
+            status === "active" && PLATFORM_ROLES.includes(role)
+                ? role
+                : null,
+    };
+};
+
+const getPlatformProfile = async (user, platformRole) => {
+    const snapshot = await getDoc(getRootUserRef(user.uid));
+    const data = snapshot.exists() ? snapshot.data() : {};
+
+    return {
+        ...data,
+        uid: user.uid,
+        ownerUid: null,
+        role: platformRole,
+        status: "active",
+        platformRole,
+    };
+};
+
+const getSiteContext = async () => {
+    if (typeof window === "undefined") {
+        throw new Error("تعذر تحديد موقع تسجيل الدخول.");
+    }
+
+    const hostname = window.location.hostname
+        .trim()
+        .toLowerCase()
+        .replace(/\.$/, "");
+
+    if (
+        hostname === PLATFORM_HOST ||
+        hostname === "localhost" ||
+        hostname === "127.0.0.1"
+    ) {
+        return {
+            type: "platform",
+            owner: null,
+        };
+    }
+
+    if (hostname.endsWith(`.${PLATFORM_HOST}`)) {
+        const slug = hostname.slice(
+            0,
+            -(PLATFORM_HOST.length + 1)
+        );
+
+        if (!slug || slug.includes(".")) {
+            throw new Error("عنوان موقع النشاط غير صالح.");
+        }
+
+        const owner = await getBusinessOwnerBySlug(slug);
+
+        if (!owner || !getOwnerUid(owner)) {
+            throw new Error("لم يتم العثور على النشاط المطلوب.");
+        }
+
+        return {
+            type: "business",
+            owner,
+        };
+    }
+
+    if (
+        hostname.endsWith(".vercel.app") ||
+        hostname.endsWith(".web.app") ||
+        hostname.endsWith(".firebaseapp.com")
+    ) {
+        throw new Error("هذا الموقع غير مسجل على منصة سِكّة.");
+    }
+
+    const owner = await getBusinessOwnerByDomain(hostname);
+
+    if (!owner || !getOwnerUid(owner)) {
+        throw new Error("هذا الدومين غير مرتبط بأي نشاط على سِكّة.");
+    }
+
+    return {
+        type: "business",
+        owner,
+    };
+};
+
+export const getPublicBusinessOwner = async () => {
+    const context = await getSiteContext();
+
+    return context.type === "business"
+        ? context.owner
         : null;
 };
 
@@ -137,10 +205,12 @@ const saveOwnerProfile = async (
         snapshot.exists() &&
         !BUSINESS_OWNER_ROLES.includes(normalizeRole(existing.role))
     ) {
-        throw new Error("هذا الحساب مرتبط بدور آخر ولا يمكن تسجيله كصاحب نشاط.");
+        throw new Error(
+            "هذا الحساب مرتبط بدور آخر ولا يمكن تسجيله كصاحب نشاط."
+        );
     }
 
-    const status = existing.status || "pending";
+    const status = normalizeStatus(existing.status);
 
     const profile = buildProfile(
         user,
@@ -153,12 +223,16 @@ const saveOwnerProfile = async (
         status
     );
 
-    await setDoc(userRef, {
-        ...profile,
-        role: "business_owner",
-        status,
-        createdAt: existing.createdAt || serverTimestamp(),
-    }, { merge: true });
+    await setDoc(
+        userRef,
+        {
+            ...profile,
+            role: "business_owner",
+            status,
+            createdAt: existing.createdAt || serverTimestamp(),
+        },
+        { merge: true }
+    );
 
     return profile;
 };
@@ -172,12 +246,32 @@ const saveBusinessUserProfile = async (
         throw new Error("تعذر تحديد حساب صاحب النشاط.");
     }
 
+    const ownerSnapshot = await getDoc(getRootUserRef(ownerUid));
+
+    if (!ownerSnapshot.exists()) {
+        throw new Error("النشاط المطلوب غير موجود.");
+    }
+
+    const ownerData = ownerSnapshot.data();
+
+    if (
+        normalizeRole(ownerData.role) !== "business_owner" ||
+        normalizeStatus(ownerData.status) !== "active"
+    ) {
+        throw new Error("النشاط غير مفعل حاليًا.");
+    }
+
     const userRef = getBusinessUserRef(ownerUid, user.uid);
     const snapshot = await getDoc(userRef);
     const existing = snapshot.exists() ? snapshot.data() : {};
 
-    if (snapshot.exists() && existing.status !== "active") {
-        throw new Error("هذا الحساب غير نشط. يرجى التواصل مع إدارة النشاط.");
+    if (
+        snapshot.exists() &&
+        normalizeStatus(existing.status) !== "active"
+    ) {
+        throw new Error(
+            "هذا الحساب غير نشط. يرجى التواصل مع إدارة النشاط."
+        );
     }
 
     const finalRole = normalizeRole(existing.role || role);
@@ -186,7 +280,7 @@ const saveBusinessUserProfile = async (
         throw new Error("دور هذا الحساب غير صالح داخل النشاط.");
     }
 
-    const status = existing.status || "active";
+    const status = normalizeStatus(existing.status, "active");
 
     const profile = buildProfile(
         user,
@@ -199,45 +293,47 @@ const saveBusinessUserProfile = async (
         status
     );
 
-    await setDoc(userRef, {
+    await setDoc(
+        userRef,
+        {
+            ...profile,
+            ownerUid,
+            role: finalRole,
+            status,
+            createdAt: existing.createdAt || serverTimestamp(),
+        },
+        { merge: true }
+    );
+
+    return {
         ...profile,
         ownerUid,
-        role: finalRole,
-        status,
-        createdAt: existing.createdAt || serverTimestamp(),
-    }, { merge: true });
-
-    return profile;
+    };
 };
 
 const getLoginProfile = async (user) => {
-    const platformRole = await getActivePlatformRole(user.uid);
+    const platformRecord = await getPlatformRoleRecord(user.uid);
 
-    if (platformRole) {
-        const snapshot = await getDoc(getRootUserRef(user.uid));
-        const data = snapshot.exists() ? snapshot.data() : {};
+    if (platformRecord.exists) {
+        if (!platformRecord.role) {
+            throw new Error(
+                "حساب المنصة غير نشط أو لا يملك دورًا صالحًا."
+            );
+        }
 
-        return {
-            ...data,
-            uid: user.uid,
-            role: platformRole,
-            status: "active",
-            platformRole,
-        };
+        return getPlatformProfile(user, platformRecord.role);
     }
 
-    const owner = await getPublicBusinessOwner();
+    const context = await getSiteContext();
 
-    if (owner) {
-        if (owner.status !== "active") {
+    if (context.type === "business") {
+        const owner = context.owner;
+
+        if (normalizeStatus(owner.status) !== "active") {
             throw new Error("موقع النشاط غير مفعل حاليًا.");
         }
 
         const ownerUid = getOwnerUid(owner);
-
-        if (!ownerUid) {
-            throw new Error("تعذر تحديد حساب صاحب النشاط.");
-        }
 
         const snapshot = await getDoc(
             getBusinessUserRef(ownerUid, user.uid)
@@ -254,8 +350,10 @@ const getLoginProfile = async (user) => {
             throw new Error("دور هذا الحساب غير صالح داخل النشاط.");
         }
 
-        if (data.status !== "active") {
-            throw new Error("هذا الحساب غير نشط. يرجى التواصل مع إدارة النشاط.");
+        if (normalizeStatus(data.status) !== "active") {
+            throw new Error(
+                "هذا الحساب غير نشط. يرجى التواصل مع إدارة النشاط."
+            );
         }
 
         return {
@@ -263,14 +361,17 @@ const getLoginProfile = async (user) => {
             uid: user.uid,
             ownerUid,
             role,
-            status: data.status,
+            status: normalizeStatus(data.status),
+            businessStatus: normalizeStatus(owner.status),
         };
     }
 
     const snapshot = await getDoc(getRootUserRef(user.uid));
 
     if (!snapshot.exists()) {
-        throw new Error("لا يوجد حساب صاحب نشاط مرتبط بهذا المستخدم.");
+        throw new Error(
+            "لا يوجد حساب صاحب نشاط مرتبط بهذا المستخدم."
+        );
     }
 
     const data = snapshot.data();
@@ -283,8 +384,10 @@ const getLoginProfile = async (user) => {
     return {
         ...data,
         uid: user.uid,
+        ownerUid: user.uid,
         role,
-        status: data.status || "pending",
+        status: normalizeStatus(data.status),
+        businessStatus: normalizeStatus(data.status),
     };
 };
 
@@ -303,14 +406,21 @@ export const registerWithEmail = async ({
     name,
     phone = "",
 }) => {
-    const owner = await getPublicBusinessOwner();
-    const ownerUid = getOwnerUid(owner);
+    const context = await getSiteContext();
 
-    if (owner && owner.status !== "active") {
+    if (
+        context.type === "business" &&
+        normalizeStatus(context.owner.status) !== "active"
+    ) {
         throw new Error("موقع النشاط غير مفعل حاليًا.");
     }
 
-    if (owner && !ownerUid) {
+    const ownerUid =
+        context.type === "business"
+            ? getOwnerUid(context.owner)
+            : null;
+
+    if (context.type === "business" && !ownerUid) {
         throw new Error("تعذر تحديد حساب صاحب النشاط.");
     }
 
@@ -327,17 +437,24 @@ export const registerWithEmail = async ({
             displayName: name || "",
         });
 
-        const profile = owner
-            ? await saveBusinessUserProfile(user, ownerUid, {
-                name,
-                phone,
-                role: "customer",
-            })
-            : await saveOwnerProfile(user, { name, phone });
+        const profile =
+            context.type === "business"
+                ? await saveBusinessUserProfile(user, ownerUid, {
+                    name,
+                    phone,
+                    role: "customer",
+                })
+                : await saveOwnerProfile(user, {
+                    name,
+                    phone,
+                });
 
         await sendEmailVerification(user);
 
-        return { ...result, profile };
+        return {
+            ...result,
+            profile,
+        };
     } catch (error) {
         await signOut(auth);
         throw error;
@@ -353,7 +470,10 @@ export const loginWithEmail = async (email, password) => {
 
     const profile = await validateLogin(result.user);
 
-    return { ...result, profile };
+    return {
+        ...result,
+        profile,
+    };
 };
 
 export const signInWithGoogle = async () => {
@@ -361,48 +481,59 @@ export const signInWithGoogle = async () => {
     const user = result.user;
 
     try {
-        const platformRole = await getActivePlatformRole(user.uid);
+        const platformRecord = await getPlatformRoleRecord(user.uid);
 
-        if (platformRole) {
-            const snapshot = await getDoc(getRootUserRef(user.uid));
-            const data = snapshot.exists() ? snapshot.data() : {};
+        if (platformRecord.exists) {
+            if (!platformRecord.role) {
+                throw new Error(
+                    "حساب المنصة غير نشط أو لا يملك دورًا صالحًا."
+                );
+            }
+
+            const profile = await getPlatformProfile(
+                user,
+                platformRecord.role
+            );
 
             return {
                 ...result,
-                profile: {
-                    ...data,
-                    uid: user.uid,
-                    role: platformRole,
-                    status: "active",
-                    platformRole,
-                },
+                profile,
             };
         }
 
-        const owner = await getPublicBusinessOwner();
+        const context = await getSiteContext();
 
-        if (owner) {
-            if (owner.status !== "active") {
+        if (context.type === "business") {
+            if (normalizeStatus(context.owner.status) !== "active") {
                 throw new Error("موقع النشاط غير مفعل حاليًا.");
             }
 
-            const ownerUid = getOwnerUid(owner);
+            const ownerUid = getOwnerUid(context.owner);
 
             if (!ownerUid) {
                 throw new Error("تعذر تحديد حساب صاحب النشاط.");
             }
 
-            const profile = await saveBusinessUserProfile(
-                user,
-                ownerUid,
-                {
-                    name: user.displayName || "مستخدم Google",
-                    phone: user.phoneNumber || "",
-                    role: "customer",
-                }
+            const snapshot = await getDoc(
+                getBusinessUserRef(ownerUid, user.uid)
             );
 
-            return { ...result, profile };
+            const profile = snapshot.exists()
+                ? await getLoginProfile(user)
+                : await saveBusinessUserProfile(
+                    user,
+                    ownerUid,
+                    {
+                        name: user.displayName || "مستخدم Google",
+                        phone: user.phoneNumber || "",
+                        role: "customer",
+                    }
+                );
+
+            return {
+                ...result,
+                profile,
+            };
         }
 
         const snapshot = await getDoc(getRootUserRef(user.uid));
@@ -413,24 +544,17 @@ export const signInWithGoogle = async () => {
                 phone: user.phoneNumber || "",
             });
 
-            return { ...result, profile };
+            return {
+                ...result,
+                profile,
+            };
         }
 
-        const data = snapshot.data();
-        const role = normalizeRole(data.role);
-
-        if (!BUSINESS_OWNER_ROLES.includes(role)) {
-            throw new Error("ليس لديك صلاحية الدخول إلى منصة سِكّة.");
-        }
+        const profile = await getLoginProfile(user);
 
         return {
             ...result,
-            profile: {
-                ...data,
-                uid: user.uid,
-                role,
-                status: data.status || "pending",
-            },
+            profile,
         };
     } catch (error) {
         await signOut(auth);

@@ -1,5 +1,4 @@
 
-
 import { Outlet, useLocation, useParams } from "react-router-dom";
 import { useEffect, useState } from "react";
 import Sidebar from "../components/Sidebar";
@@ -7,13 +6,22 @@ import TopNavbar from "../components/TopNavbar";
 import { pageTitles } from "../components/sidebarData";
 import { useI18n } from "@/i18n/i18n/context";
 import ImpersonationBanner from "@/components/common/ImpersonationBanner";
-import { useTenant } from "@/context/TenantContext";
+import { useBusiness } from "@/context/TenantContext";
+import { useAuth } from "@/context/AuthContext";
 
 export default function DashboardLayout({ children }) {
     const location = useLocation();
-    const { locale } = useParams();
+    const { locale = "ar" } = useParams();
     const { t } = useI18n();
-    const { isExpiringSoon, isExpired, daysRemaining, isImpersonating } = useTenant();
+
+    const {
+        isExpiringSoon,
+        isExpired,
+        daysRemaining,
+        isImpersonating,
+    } = useBusiness();
+
+    const { isPlatformUser } = useAuth();
 
     const currentPage = location.pathname.split("/").pop();
 
@@ -39,6 +47,11 @@ export default function DashboardLayout({ children }) {
             window.removeEventListener("resize", handleResize);
         };
     }, []);
+
+    const shouldShowExpiryAlert =
+        !isPlatformUser &&
+        !isImpersonating &&
+        (isExpiringSoon || isExpired);
 
     return (
         <div className="min-h-screen w-full flex flex-col">
@@ -66,12 +79,16 @@ export default function DashboardLayout({ children }) {
                         onMenuClick={() => setIsSidebarOpen(!isSidebarOpen)}
                     />
 
-                    {/* Merchant Expiry Alert (Only for merchants, not super admin impersonating) */}
-                    {(isExpiringSoon || isExpired) && !isImpersonating && (
+                    {shouldShowExpiryAlert && (
                         <div className="mx-2 mt-3 p-3 rounded-xl bg-amber-500/15 border border-amber-500/30 text-amber-300 text-xs flex items-center justify-between gap-2">
                             <span>
-                                ⚠️ تنبيه: اشتراك باقتكم في منصة SEKKA ينتهي خلال {daysRemaining > 0 ? `${daysRemaining} أيام` : "فترة وجيزة"}. يرجى التجديد لضمان استمرار عمل المتجر بدون انقطاع.
+                                ⚠️ تنبيه: اشتراك باقتكم في منصة SEKKA ينتهي خلال{" "}
+                                {daysRemaining > 0
+                                    ? `${daysRemaining} أيام`
+                                    : "فترة وجيزة"}
+                                . يرجى التجديد لضمان استمرار عمل المتجر بدون انقطاع.
                             </span>
+
                             <a
                                 href="https://wa.me/201023671214"
                                 target="_blank"
@@ -97,4 +114,3 @@ export default function DashboardLayout({ children }) {
         </div>
     );
 }
-
