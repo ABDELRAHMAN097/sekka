@@ -36,7 +36,7 @@ export const menuItems = [
     },
     {
         name: "EditLanding",
-        path: "/EditLanding",
+        path: "/setting",
         icon: HiOutlineUsers,
         moduleKey: "editLanding",
         allowedRoles: ["admin", "super_admin", "platform_admin", "tenant_owner", "tenant_admin", "tenant_staf", "tenant_staff"],

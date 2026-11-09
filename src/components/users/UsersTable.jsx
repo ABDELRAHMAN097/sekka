@@ -1,34 +1,22 @@
+
 import { memo, useCallback, useState } from "react";
 import { FiShield, FiUser, FiMail, FiPhone, FiEdit2 } from "react-icons/fi";
 import ChangeRoleModal from "./ChangeRoleModal";
 
 const ROLE_LABELS = {
-    platform_admin: "مسؤول المنصة",
-    platform_staf: "فريق المنصة",
-    platform_staff: "فريق المنصة",
-    tenant_owner: "مالك النشاط",
-    tenant_staf: "موظف النشاط",
-    tenant_staff: "موظف النشاط",
-    tenant_driver: "سائق النشاط",
-    tenant_admin: "مسؤول المتجر",
+    business_owner: "مالك النشاط",
     admin: "مدير",
-    super_admin: "سوبر ادمن",
+    staff: "موظف",
+    worker: "عامل",
     driver: "سائق",
     customer: "عميل",
-    client: "عميل",
-    user: "مستخدم",
-    staff: "موظف / ستاف",
-    employee: "موظف",
-    manager: "مشرف",
-    management: "إدارة",
-    supervisor: "مشرف",
 };
 
 const STATUS_LABELS = {
     active: "نشط",
     inactive: "غير نشط",
     blocked: "محظور",
-    pending: "قيد المراجعة",
+    suspended: "موقوف",
 };
 
 const HEADERS = [
@@ -48,6 +36,7 @@ const label = (map, key) => {
     const normalizedKey = str.replace(/[\s-]+/g, "_");
     return map[normalizedKey] || map[str] || key;
 };
+
 const getName = (u) => u.name || u.displayName || "—";
 const getPhone = (u) => u.phone || u.phoneNumber || "—";
 const getInitial = (u) =>
@@ -79,16 +68,16 @@ const Avatar = memo(({ user }) => {
 });
 
 const RoleBadge = memo(({ role }) => {
-    const isAdmin = typeof role === "string" && role.toLowerCase().includes("admin");
+    const normalizedRole = String(role || "").toLowerCase();
+    const isAdmin = ["business_owner", "admin"].includes(normalizedRole);
     const Icon = isAdmin ? FiShield : FiUser;
 
     return (
         <span
-            className={`inline-flex items-center gap-2 rounded-xl border px-2 py-1.5 text-xs font-semibold ${
-                isAdmin
-                    ? "border-accent/30 bg-accent/10 text-accent"
-                    : "border-border bg-card text-text-secondary"
-            }`}
+            className={`inline-flex items-center gap-2 rounded-xl border px-2 py-1.5 text-xs font-semibold ${isAdmin
+                ? "border-accent/30 bg-accent/10 text-accent"
+                : "border-border bg-card text-text-secondary"
+                }`}
         >
             <Icon className="h-3.5 w-3.5" />
             {label(ROLE_LABELS, role)}
@@ -101,6 +90,7 @@ const StatusBadge = memo(({ status }) => {
     const active = s === "active";
     const pending = s === "pending";
     const blocked = s === "blocked";
+    const suspended = s === "suspended";
 
     let badgeClass = "border-border bg-card text-text-muted";
     let dotClass = "bg-text-muted";
@@ -111,7 +101,7 @@ const StatusBadge = memo(({ status }) => {
     } else if (pending) {
         badgeClass = "border-warning/30 bg-warning/10 text-warning";
         dotClass = "abu-pulse bg-warning";
-    } else if (blocked) {
+    } else if (blocked || suspended) {
         badgeClass = "border-error/30 bg-error/10 text-error";
         dotClass = "bg-error";
     }
@@ -130,9 +120,8 @@ const ChangeRoleButton = ({ onClick, fullWidth }) => (
     <button
         type="button"
         onClick={onClick}
-        className={`group/btn inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-primary-color px-2 py-2.5 text-[10px] font-bold text-background shadow-lg shadow-primary-color/10 transition-all duration-300 hover:bg-primary-hover hover:shadow-primary-color/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-color/60 focus-visible:ring-offset-2 focus-visible:ring-offset-surface active:scale-95 ${
-            fullWidth ? "w-full" : ""
-        }`}
+        className={`group/btn inline-flex cursor-pointer items-center justify-center gap-2 rounded-xl bg-primary-color px-2 py-2.5 text-[10px] font-bold text-background shadow-lg shadow-primary-color/10 transition-all duration-300 hover:bg-primary-hover hover:shadow-primary-color/25 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-color/60 focus-visible:ring-offset-2 focus-visible:ring-offset-surface active:scale-95 ${fullWidth ? "w-full" : ""
+            }`}
     >
         <FiEdit2 className="text-[10px] transition-transform duration-300 group-hover/btn:-rotate-12" />
         إدارة الحساب
@@ -189,8 +178,9 @@ const UserRow = memo(({ user, onChangeRole }) => (
             <StatusBadge status={user.status} />
         </td>
         <td className="px-3 py-4">
-            <ChangeRoleButton onClick={() => onChangeRole(user)} />
-        </td>
+            {user.role !== "business_owner" && (
+                <ChangeRoleButton onClick={() => onChangeRole(user)} />
+            )}        </td>
     </tr>
 ));
 
@@ -213,10 +203,11 @@ const UserCard = memo(({ user, onChangeRole }) => (
                 <RoleBadge role={user.role} />
             </div>
         </div>
-
-        <div className="mt-4">
-            <ChangeRoleButton fullWidth onClick={() => onChangeRole(user)} />
-        </div>
+        {user.role !== "business_owner" && (
+            <div className="mt-4">
+                <ChangeRoleButton fullWidth onClick={() => onChangeRole(user)} />
+            </div>
+        )}
     </div>
 ));
 

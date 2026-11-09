@@ -1,3 +1,4 @@
+
 import {
     FaUsers,
     FaUser,
@@ -5,29 +6,26 @@ import {
     FaUserShield,
 } from "react-icons/fa";
 
-const UserStats = ({
-    stats,
-    loading,
-}) => {
+const UserStats = ({ stats = {}, loading }) => {
     const cards = [
         {
             title: "إجمالي المستخدمين",
-            value: stats.total,
+            value: stats.total ?? 0,
             icon: FaUsers,
         },
         {
             title: "العملاء",
-            value: stats.customers,
+            value: stats.customers ?? 0,
             icon: FaUser,
         },
         {
             title: "السائقين",
-            value: stats.drivers,
+            value: stats.drivers ?? 0,
             icon: FaCar,
         },
         {
-            title: "الإدارة",
-            value: stats.management,
+            title: "الإدارة والتشغيل",
+            value: stats.management ?? 0,
             icon: FaUserShield,
         },
     ];

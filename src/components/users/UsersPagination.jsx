@@ -1,9 +1,16 @@
+
 import { FiChevronLeft, FiChevronRight } from "react-icons/fi";
 
 const base =
     "group inline-flex h-10 cursor-pointer items-center justify-center gap-2 rounded-xl px-4 text-sm font-semibold transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary-color/60 focus-visible:ring-offset-2 focus-visible:ring-offset-background active:scale-95 disabled:cursor-not-allowed disabled:opacity-40 disabled:active:scale-100";
 
-const UsersPagination = ({ currentPage, hasNextPage, onNext, onPrevious, loading }) => (
+const UsersPagination = ({
+    currentPage = 1,
+    hasNextPage = false,
+    onNext,
+    onPrevious,
+    loading = false,
+}) => (
     <nav
         dir="rtl"
         aria-label="التنقل بين الصفحات"

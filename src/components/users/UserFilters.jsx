@@ -1,3 +1,4 @@
+
 import { FiSearch, FiChevronDown, FiX } from "react-icons/fi";
 
 const SEARCH_BY = [
@@ -9,27 +10,26 @@ const SEARCH_BY = [
 
 const ROLES = [
     ["all", "كل الأدوار"],
+    ["admin", "مدير"],
+    ["staff", "موظف"],
+    ["worker", "عامل"],
+    ["driver", "سائق"],
     ["customer", "عميل"],
-    ["tenant_driver", "سائق (tenant_driver)"],
-    ["tenant_staf", "موظف (tenant_staf)"],
-    ["tenant_owner", "مالك النشاط (tenant_owner)"],
-    ["platform_admin", "مسؤول المنصة (platform_admin)"],
-    ["platform_staf", "فريق المنصة (platform_staf)"],
 ];
 
 const STATUSES = [
     ["all", "كل الحالات"],
     ["active", "نشط"],
     ["inactive", "غير نشط"],
-    ["pending", "قيد المراجعة"],
     ["blocked", "محظور"],
+    ["suspended", "موقوف"],
 ];
 
 const fieldClass =
     "h-11 w-full rounded-xl border border-border bg-surface text-sm text-text-primary outline-none transition-colors hover:border-text-muted focus:border-primary-color focus:ring-2 focus:ring-primary-color/20";
 
 const Select = ({ value, options, onChange, label }) => (
-    <div className="relative w-full lg:w-44 shrink-0">
+    <div className="relative w-full shrink-0 lg:w-44">
         <select
             aria-label={label}
             value={value}
@@ -79,12 +79,12 @@ export default function UserFilters({
 
     return (
         <div className="flex flex-col gap-3 lg:flex-row lg:items-center">
-            <div className="relative flex-1 min-w-[220px]">
-                <div className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 flex items-center justify-center text-text-muted">
+            <div className="relative min-w-[220px] flex-1">
+                <div className="pointer-events-none absolute right-4 top-1/2 flex items-center justify-center -translate-y-1/2 text-text-muted">
                     {isDebouncing || searchLoading ? (
                         <span
                             aria-label="جاري البحث"
-                            className="h-4 w-4 rounded-full border-2 border-primary-color border-t-transparent animate-spin"
+                            className="h-4 w-4 animate-spin rounded-full border-2 border-primary-color border-t-transparent"
                         />
                     ) : (
                         <FiSearch size={18} />
@@ -111,9 +111,26 @@ export default function UserFilters({
                 )}
             </div>
 
-            <Select label="البحث في" value={searchBy} options={SEARCH_BY} onChange={onSearchByChange} />
-            <Select label="الدور" value={roleFilter} options={ROLES} onChange={onRoleFilterChange} />
-            <Select label="الحالة" value={statusFilter} options={STATUSES} onChange={onStatusFilterChange} />
+            <Select
+                label="البحث في"
+                value={searchBy}
+                options={SEARCH_BY}
+                onChange={onSearchByChange}
+            />
+
+            <Select
+                label="الدور"
+                value={roleFilter}
+                options={ROLES}
+                onChange={onRoleFilterChange}
+            />
+
+            <Select
+                label="الحالة"
+                value={statusFilter}
+                options={STATUSES}
+                onChange={onStatusFilterChange}
+            />
 
             {hasFilters && (
                 <button

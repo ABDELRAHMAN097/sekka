@@ -9,403 +9,469 @@ import {
     getAllUsers,
     getUserStats,
     searchUsers,
-    updateUserRole,
     updateUserAccount,
 } from "@/services/userService";
-import { useTenant } from "@/context/TenantContext";
+
+import { useBusiness } from "@/context/TenantContext";
 
 const PAGE_SIZE = 5;
-const SEARCH_DEBOUNCE = 350;
+const SEARCH_DELAY = 350;
 const MIN_SEARCH_LENGTH = 2;
 
-const useUsers = () => {
-    const { tenantId } = useTenant();
+const INITIAL_STATS = {
+    total: 0,
+    customers: 0,
+    drivers: 0,
+    management: 0,
+    admins: 0,
+    staff: 0,
+    workers: 0,
+    superAdmins: 0,
+};
 
-    // Normal paginated users state
+export const useUsers = () => {
+    const {
+        ownerUid,
+        loadingBusiness,
+    } = useBusiness();
+
     const [users, setUsers] = useState([]);
     const [regularLoading, setRegularLoading] = useState(true);
     const [regularCurrentPage, setRegularCurrentPage] = useState(1);
     const [regularHasNextPage, setRegularHasNextPage] = useState(false);
-    const cursorsRef = useRef({});
-    const usersRequestRef = useRef(0);
 
-    // Search state
     const [searchQuery, setSearchQuery] = useState("");
-    const [debouncedQuery, setDebouncedQuery] = useState("");
-    const [isDebouncing, setIsDebouncing] = useState(false);
-    const [searchLoading, setSearchLoading] = useState(false);
     const [searchResults, setSearchResults] = useState([]);
+    const [searchLoading, setSearchLoading] = useState(false);
+    const [isDebouncing, setIsDebouncing] = useState(false);
     const [searchPage, setSearchPage] = useState(1);
-    const searchTimerRef = useRef(null);
-    const searchRequestRef = useRef(0);
 
-    // Filter states
     const [searchBy, setSearchBy] = useState("all");
     const [roleFilter, setRoleFilter] = useState("all");
     const [statusFilter, setStatusFilter] = useState("all");
 
-    // Stats state
-    const [stats, setStats] = useState({
-        total: 0,
-        customers: 0,
-        drivers: 0,
-        management: 0,
-        admins: 0,
-        superAdmins: 0,
-    });
+    const [stats, setStats] = useState(INITIAL_STATS);
     const [statsLoading, setStatsLoading] = useState(true);
 
-    const isSearching = debouncedQuery.trim().length >= MIN_SEARCH_LENGTH;
+    const cursorsRef = useRef([0]);
+    const usersRequestRef = useRef(0);
+    const searchRequestRef = useRef(0);
+    const statsRequestRef = useRef(0);
+    const searchTimerRef = useRef(null);
 
-    // Fetch paginated users for normal browsing
-    const fetchUsersPage = useCallback(
-        async (page = 1) => {
-            const requestId = ++usersRequestRef.current;
-            setRegularLoading(true);
+    const isSearching = searchQuery.trim().length >= MIN_SEARCH_LENGTH;
 
-            try {
-                const cursor =
-                    page === 1
-                        ? null
-                        : cursorsRef.current[page - 1] || null;
-
-                const result = await getAllUsers({
-                    pageSize: PAGE_SIZE,
-                    role: roleFilter,
-                    status: statusFilter,
-                    cursor,
-                    tenantId,
-                });
-
-                if (requestId !== usersRequestRef.current) {
-                    return;
-                }
-
-                setUsers(result.users);
-                setRegularHasNextPage(result.hasNextPage);
-                setRegularCurrentPage(page);
-
-                if (result.lastDoc) {
-                    cursorsRef.current[page] = result.lastDoc;
-                }
-            } catch (error) {
-                if (requestId !== usersRequestRef.current) {
-                    return;
-                }
-                setUsers([]);
-                setRegularHasNextPage(false);
-            } finally {
-                if (requestId === usersRequestRef.current) {
-                    setRegularLoading(false);
-                }
-            }
-        },
-        [roleFilter, statusFilter, tenantId]
-    );
-
-    // Fetch statistics
-    const fetchStats = useCallback(async () => {
-        setStatsLoading(true);
-        try {
-            const result = await getUserStats({ tenantId });
-            setStats(result);
-        } catch (error) {
-            setStats({
-                total: 0,
-                customers: 0,
-                drivers: 0,
-                management: 0,
-                admins: 0,
-                superAdmins: 0,
-            });
-        } finally {
-            setStatsLoading(false);
-        }
-    }, [tenantId]);
-
-    // Regular users browsing effect
-    useEffect(() => {
-        if (isSearching) {
+    const fetchUsersPage = useCallback(async ({
+        page = 1,
+        reset = false,
+    } = {}) => {
+        if (!ownerUid) {
+            setUsers([]);
+            setRegularHasNextPage(false);
+            setRegularLoading(false);
             return;
         }
 
-        cursorsRef.current = {};
-        setRegularCurrentPage(1);
-        fetchUsersPage(1);
-    }, [roleFilter, statusFilter, isSearching, fetchUsersPage]);
+        const requestId = ++usersRequestRef.current;
 
-    // Initial stats fetch
-    useEffect(() => {
-        fetchStats();
-    }, [fetchStats]);
+        setRegularLoading(true);
 
-    // Debounce handler on searchQuery changes
-    useEffect(() => {
-        if (searchTimerRef.current) {
-            clearTimeout(searchTimerRef.current);
+        try {
+            const cursor = reset
+                ? 0
+                : cursorsRef.current[page - 1] ?? 0;
+
+            const result = await getAllUsers({
+                ownerUid,
+                pageSize: PAGE_SIZE,
+                role: roleFilter,
+                status: statusFilter,
+                cursor,
+            });
+
+            if (requestId !== usersRequestRef.current) {
+                return;
+            }
+
+            setUsers(result.users || []);
+            setRegularCurrentPage(page);
+            setRegularHasNextPage(Boolean(result.hasNextPage));
+
+            if (reset) {
+                cursorsRef.current = [0];
+            }
+
+            if (result.nextCursor !== null && result.nextCursor !== undefined) {
+                cursorsRef.current[page] = result.nextCursor;
+            }
+        } catch (error) {
+            if (requestId === usersRequestRef.current) {
+                console.error("Failed to fetch business users:", error);
+                setUsers([]);
+                setRegularHasNextPage(false);
+            }
+        } finally {
+            if (requestId === usersRequestRef.current) {
+                setRegularLoading(false);
+            }
+        }
+    }, [ownerUid, roleFilter, statusFilter]);
+
+    const fetchStats = useCallback(async () => {
+        if (!ownerUid) {
+            setStats(INITIAL_STATS);
+            setStatsLoading(false);
+            return;
         }
 
-        const trimmed = searchQuery.trim();
+        const requestId = ++statsRequestRef.current;
 
-        if (trimmed.length < MIN_SEARCH_LENGTH) {
-            searchRequestRef.current += 1;
-            setIsDebouncing(false);
-            setDebouncedQuery("");
+        setStatsLoading(true);
+
+        try {
+            const result = await getUserStats({ ownerUid });
+
+            if (requestId !== statsRequestRef.current) {
+                return;
+            }
+
+            setStats({
+                ...INITIAL_STATS,
+                ...result,
+            });
+        } catch (error) {
+            if (requestId === statsRequestRef.current) {
+                console.error("Failed to fetch user stats:", error);
+                setStats(INITIAL_STATS);
+            }
+        } finally {
+            if (requestId === statsRequestRef.current) {
+                setStatsLoading(false);
+            }
+        }
+    }, [ownerUid]);
+
+    const runSearch = useCallback(async (
+        value = searchQuery
+    ) => {
+        const trimmedQuery = value.trim();
+
+        if (
+            !ownerUid ||
+            trimmedQuery.length < MIN_SEARCH_LENGTH
+        ) {
             setSearchResults([]);
             setSearchLoading(false);
             setSearchPage(1);
             return;
         }
 
-        // Active typing: mark debouncing as active
+        const requestId = ++searchRequestRef.current;
+
+        setSearchLoading(true);
+
+        try {
+            const result = await searchUsers({
+                ownerUid,
+                searchQuery: trimmedQuery,
+                searchBy,
+                role: roleFilter,
+                status: statusFilter,
+                limitResults: 100,
+            });
+
+            if (requestId !== searchRequestRef.current) {
+                return;
+            }
+
+            setSearchResults(result.users || []);
+            setSearchPage(1);
+        } catch (error) {
+            if (requestId === searchRequestRef.current) {
+                console.error("Failed to search business users:", error);
+                setSearchResults([]);
+            }
+        } finally {
+            if (requestId === searchRequestRef.current) {
+                setSearchLoading(false);
+            }
+        }
+    }, [
+        ownerUid,
+        searchQuery,
+        searchBy,
+        roleFilter,
+        statusFilter,
+    ]);
+
+    useEffect(() => {
+        if (loadingBusiness) {
+            return;
+        }
+
+        cursorsRef.current = [0];
+        setRegularCurrentPage(1);
+        setSearchResults([]);
+        setSearchQuery("");
+        setSearchPage(1);
+
+        fetchUsersPage({
+            page: 1,
+            reset: true,
+        });
+
+        fetchStats();
+    }, [
+        ownerUid,
+        loadingBusiness,
+        fetchUsersPage,
+        fetchStats,
+    ]);
+
+    useEffect(() => {
+        if (searchTimerRef.current) {
+            clearTimeout(searchTimerRef.current);
+        }
+
+        if (loadingBusiness) {
+            return;
+        }
+
+        const trimmedQuery = searchQuery.trim();
+
+        if (trimmedQuery.length < MIN_SEARCH_LENGTH) {
+            searchRequestRef.current += 1;
+            setSearchResults([]);
+            setSearchLoading(false);
+            setIsDebouncing(false);
+            setSearchPage(1);
+            return;
+        }
+
         setIsDebouncing(true);
 
         searchTimerRef.current = setTimeout(() => {
             setIsDebouncing(false);
-            setDebouncedQuery(trimmed);
-        }, SEARCH_DEBOUNCE);
+            runSearch(trimmedQuery);
+        }, SEARCH_DELAY);
 
         return () => {
             if (searchTimerRef.current) {
                 clearTimeout(searchTimerRef.current);
             }
         };
-    }, [searchQuery]);
+    }, [
+        searchQuery,
+        searchBy,
+        roleFilter,
+        statusFilter,
+        ownerUid,
+        loadingBusiness,
+        runSearch,
+    ]);
 
-    // Execute search when debounced query or any filter changes
     useEffect(() => {
-        if (!isSearching) {
-            return;
-        }
-
-        const requestId = ++searchRequestRef.current;
-        setSearchLoading(true);
-        setSearchPage(1);
-
-        const runSearch = async () => {
-            try {
-                const results = await searchUsers({
-                    searchQuery: debouncedQuery,
-                    searchBy,
-                    role: roleFilter,
-                    status: statusFilter,
-                    limitResults: 100,
-                    tenantId,
-                });
-
-                if (requestId !== searchRequestRef.current) {
-                    return;
-                }
-
-                setSearchResults(results);
-            } catch (error) {
-                if (requestId !== searchRequestRef.current) {
-                    return;
-                }
-                setSearchResults([]);
-            } finally {
-                if (requestId === searchRequestRef.current) {
-                    setSearchLoading(false);
-                }
-            }
-        };
-
-        runSearch();
-    }, [debouncedQuery, searchBy, roleFilter, statusFilter, isSearching, tenantId]);
-
-    // Search input handler
-    const handleSearch = useCallback((value) => {
-        setSearchQuery(value);
-        if (!value.trim()) {
+        return () => {
             if (searchTimerRef.current) {
                 clearTimeout(searchTimerRef.current);
             }
+
+            usersRequestRef.current += 1;
             searchRequestRef.current += 1;
-            setIsDebouncing(false);
-            setDebouncedQuery("");
-            setSearchResults([]);
-            setSearchLoading(false);
-            setSearchPage(1);
-        }
+            statsRequestRef.current += 1;
+        };
     }, []);
 
-    // Filter changes without wiping search query
+    const handleSearch = useCallback((value) => {
+        setSearchQuery(value);
+        setSearchPage(1);
+    }, []);
+
     const handleSearchByChange = useCallback((value) => {
         setSearchBy(value);
         setSearchPage(1);
     }, []);
 
     const handleRoleFilterChange = useCallback((value) => {
+        cursorsRef.current = [0];
         setRoleFilter(value);
-        setSearchPage(1);
-        cursorsRef.current = {};
         setRegularCurrentPage(1);
+        setSearchPage(1);
     }, []);
 
     const handleStatusFilterChange = useCallback((value) => {
+        cursorsRef.current = [0];
         setStatusFilter(value);
-        setSearchPage(1);
-        cursorsRef.current = {};
         setRegularCurrentPage(1);
+        setSearchPage(1);
     }, []);
-
-    // Pagination calculations
-    const searchTotalPages = Math.max(1, Math.ceil(searchResults.length / PAGE_SIZE));
-
-    const pagedSearchResults = searchResults.slice(
-        (searchPage - 1) * PAGE_SIZE,
-        searchPage * PAGE_SIZE
-    );
-
-    const currentPage = isSearching ? searchPage : regularCurrentPage;
-    const hasNextPage = isSearching ? searchPage < searchTotalPages : regularHasNextPage;
 
     const handleNextPage = useCallback(() => {
         if (isSearching) {
-            if (searchPage < searchTotalPages && !searchLoading) {
-                setSearchPage((prev) => prev + 1);
-            }
-        } else {
-            if (regularHasNextPage && !regularLoading) {
-                fetchUsersPage(regularCurrentPage + 1);
-            }
+            const maxPage = Math.ceil(searchResults.length / PAGE_SIZE);
+
+            setSearchPage((currentPage) =>
+                Math.min(currentPage + 1, maxPage)
+            );
+
+            return;
         }
+
+        if (!regularHasNextPage) {
+            return;
+        }
+
+        fetchUsersPage({
+            page: regularCurrentPage + 1,
+        });
     }, [
         isSearching,
-        searchPage,
-        searchTotalPages,
-        searchLoading,
+        searchResults.length,
         regularHasNextPage,
-        regularLoading,
         regularCurrentPage,
         fetchUsersPage,
     ]);
 
     const handlePreviousPage = useCallback(() => {
         if (isSearching) {
-            if (searchPage > 1 && !searchLoading) {
-                setSearchPage((prev) => prev - 1);
-            }
-        } else {
-            if (regularCurrentPage > 1 && !regularLoading) {
-                fetchUsersPage(regularCurrentPage - 1);
-            }
+            setSearchPage((currentPage) =>
+                Math.max(currentPage - 1, 1)
+            );
+
+            return;
         }
+
+        if (regularCurrentPage <= 1) {
+            return;
+        }
+
+        fetchUsersPage({
+            page: regularCurrentPage - 1,
+        });
     }, [
         isSearching,
-        searchPage,
-        searchLoading,
         regularCurrentPage,
-        regularLoading,
         fetchUsersPage,
     ]);
 
-    // Refresh everything
     const refreshUsers = useCallback(async () => {
-        usersRequestRef.current += 1;
         searchRequestRef.current += 1;
+        usersRequestRef.current += 1;
 
-        if (searchTimerRef.current) {
-            clearTimeout(searchTimerRef.current);
-        }
-
-        setIsDebouncing(false);
         setSearchQuery("");
-        setDebouncedQuery("");
         setSearchResults([]);
-        setSearchLoading(false);
         setSearchPage(1);
-
-        cursorsRef.current = {};
         setRegularCurrentPage(1);
 
+        cursorsRef.current = [0];
+
         await Promise.all([
-            fetchUsersPage(1),
+            fetchUsersPage({
+                page: 1,
+                reset: true,
+            }),
             fetchStats(),
         ]);
-    }, [fetchUsersPage, fetchStats]);
+    }, [
+        fetchUsersPage,
+        fetchStats,
+    ]);
 
-    const handleUserUpdate = useCallback(
-        async (userId, updates) => {
-            const payload = typeof updates === "string" ? { role: updates } : updates;
-            await updateUserAccount(userId, { ...payload, tenantId });
+    const handleUserUpdate = useCallback(async (
+        userId,
+        payload
+    ) => {
+        if (!ownerUid) {
+            throw new Error("لم يتم تحديد النشاط الحالي.");
+        }
 
-            if (isSearching) {
-                searchRequestRef.current += 1;
-                const requestId = searchRequestRef.current;
-                setSearchLoading(true);
+        const updates = typeof payload === "string"
+            ? { role: payload }
+            : payload;
 
-                try {
-                    const results = await searchUsers({
-                        searchQuery: debouncedQuery,
-                        searchBy,
-                        role: roleFilter,
-                        status: statusFilter,
-                        limitResults: 100,
-                    });
+        await updateUserAccount(userId, {
+            ...updates,
+            ownerUid,
+        });
 
-                    if (requestId === searchRequestRef.current) {
-                        setSearchResults(results);
-                    }
-                } finally {
-                    if (requestId === searchRequestRef.current) {
-                        setSearchLoading(false);
-                    }
-                }
-            } else {
-                await fetchUsersPage(regularCurrentPage);
-            }
+        if (isSearching) {
+            await runSearch(searchQuery);
+        } else {
+            await fetchUsersPage({
+                page: regularCurrentPage,
+            });
+        }
 
-            await fetchStats();
-        },
-        [
-            isSearching,
-            debouncedQuery,
-            searchBy,
-            roleFilter,
-            statusFilter,
-            regularCurrentPage,
-            fetchUsersPage,
-            fetchStats,
-        ]
-    );
+        await fetchStats();
+    }, [
+        ownerUid,
+        isSearching,
+        searchQuery,
+        runSearch,
+        fetchUsersPage,
+        regularCurrentPage,
+        fetchStats,
+    ]);
+
+    const handleRoleUpdate = useCallback(async (
+        userId,
+        payload
+    ) => {
+        return handleUserUpdate(userId, payload);
+    }, [handleUserUpdate]);
+
+    const filteredUsers = isSearching
+        ? searchResults.slice(
+            (searchPage - 1) * PAGE_SIZE,
+            searchPage * PAGE_SIZE
+        )
+        : users;
+
+    const totalSearchResults = searchResults.length;
+
+    const currentPage = isSearching
+        ? searchPage
+        : regularCurrentPage;
+
+    const hasNextPage = isSearching
+        ? searchPage * PAGE_SIZE < totalSearchResults
+        : regularHasNextPage;
 
     return {
         users,
-        filteredUsers: isSearching ? pagedSearchResults : users,
-        totalSearchResults: searchResults.length,
+        filteredUsers,
+        totalSearchResults,
 
-        loading: isSearching ? searchLoading : regularLoading,
+        loading: regularLoading || loadingBusiness,
         searchLoading,
         isDebouncing,
         statsLoading,
 
         searchQuery,
         searchBy,
-
         handleSearch,
         handleSearchByChange,
 
         roleFilter,
         statusFilter,
-
         handleRoleFilterChange,
         handleStatusFilterChange,
+
+        handleRoleChange: handleRoleFilterChange,
+        handleStatusChange: handleStatusFilterChange,
 
         stats,
 
         currentPage,
         hasNextPage,
-
         handleNextPage,
         handlePreviousPage,
 
         refreshUsers,
-        handleRoleUpdate: handleUserUpdate,
+        handleRoleUpdate,
         handleUserUpdate,
 
         isSearching,
     };
 };
-
 export default useUsers;
